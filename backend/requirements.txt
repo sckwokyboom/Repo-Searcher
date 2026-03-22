@@ -1,0 +1,15 @@
+fastapi==0.135.1
+uvicorn[standard]==0.42.0
+pydantic==2.12.5
+pydantic-settings==2.13.1
+httpx==0.28.1
+websockets==16.0
+tree-sitter==0.25.2
+tree-sitter-java==0.23.5
+rank-bm25==0.2.2
+faiss-cpu==1.13.2
+networkx==3.6.1
+numpy==2.4.3
+transformers==5.3.0
+torch==2.10.0
+accelerate==1.13.0
