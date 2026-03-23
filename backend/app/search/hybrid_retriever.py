@@ -9,7 +9,8 @@ from app.indexer.store import load_bm25, load_chunks, load_faiss
 from app.ml.model_manager import get_model_manager
 from app.models.search import SearchResult
 from app.search.graph_expander import GraphExpander
-from app.search.query_expander import expand_query
+from app.search.graph_mcts import GraphMCTS
+from app.search.mcts_rewriter import mcts_rewrite
 from app.search.reranker import rerank
 
 # Cache loaded indexes
@@ -44,19 +45,24 @@ class HybridRetriever:
 
     def _search_impl(self, query: str, top_k: int = 5) -> dict:
         chunks = self.indexes["chunks"]
+        bm25 = self.indexes["bm25"]
+        corpus = self.indexes["corpus"]
 
-        # Query expansion
-        expanded_query, keywords = expand_query(query)
+        # MCTS query rewriting with hybrid reward (BM25 + semantic + LLM)
+        faiss_index = self.indexes["faiss"]
+        mcts_result = mcts_rewrite(query, bm25, corpus, chunks, faiss_index)
+        expanded_query = mcts_result["best_query"]
+        keywords = mcts_result["keywords"]
+        mcts_trace = mcts_result["trace"]
 
         # BM25 retrieval
-        bm25 = self.indexes["bm25"]
         tokenized_query = tokenize(expanded_query)
         bm25_scores = bm25.get_scores(tokenized_query)
         bm25_top_indices = np.argsort(bm25_scores)[::-1][: settings.bm25_top_k]
 
-        # FAISS retrieval
+        # FAISS retrieval (uses rewritten query for better semantic match)
         manager = get_model_manager()
-        query_vector = manager.encode_query(query)
+        query_vector = manager.encode_query(expanded_query)
         query_vector = query_vector / np.linalg.norm(query_vector, axis=1, keepdims=True)
         faiss_index = self.indexes["faiss"]
         distances, faiss_top_indices = faiss_index.search(
@@ -104,10 +110,34 @@ class HybridRetriever:
                     rrf_score=rrf_scores.get(idx, 0.0),
                     callers=callers,
                     callees=callees,
+                    source="search",
                 )
             )
+
+        # Call Graph MCTS: explore graph from top results to find related code
+        graph_mcts_trace = None
+        seed_ids = [r.chunk.chunk_id for r in results]
+        if seed_ids:
+            call_graph = graph_expander.graph
+            graph_mcts = GraphMCTS(call_graph, chunks, faiss_index)
+            graph_result = graph_mcts.explore(query, seed_ids)
+
+            # Add graph discoveries to results
+            existing_ids = {r.chunk.chunk_id for r in results}
+            for discovery in graph_result["discoveries"]:
+                if discovery.chunk.chunk_id not in existing_ids:
+                    # Enrich with call graph neighbors
+                    callers, callees = graph_expander.get_neighbors(discovery.chunk.chunk_id)
+                    discovery.callers = callers
+                    discovery.callees = callees
+                    results.append(discovery)
+                    existing_ids.add(discovery.chunk.chunk_id)
+
+            graph_mcts_trace = graph_result["trace"]
 
         return {
             "results": results,
             "expanded_keywords": keywords,
+            "mcts_trace": mcts_trace,
+            "graph_mcts_trace": graph_mcts_trace,
         }

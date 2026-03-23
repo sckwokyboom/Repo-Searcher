@@ -20,6 +20,13 @@ class Settings(BaseSettings):
     embedding_batch_size: int = 32
     embedding_dim: int = 768
 
+    mcts_iterations: int = 2
+    mcts_children: int = 3
+
+    graph_mcts_iterations: int = 3
+    graph_mcts_reward_threshold: float = 0.3
+    graph_mcts_max_discoveries: int = 3
+
     frontend_url: str = "http://localhost:5173"
 
     model_config = {"env_prefix": "CODEGRAPH_", "env_file": ".env"}

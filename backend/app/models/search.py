@@ -30,6 +30,69 @@ class SearchResult(BaseModel):
     rrf_score: float | None = None
     callers: list[str] = []
     callees: list[str] = []
+    source: str = "search"  # "search" | "graph_mcts"
+    discovered_via: str | None = None  # chunk_id of the node that led to discovery
+    relation: str | None = None  # "calls" | "called_by"
+
+
+# --- MCTS Trace models ---
+
+
+class MCTSHitInfo(BaseModel):
+    """A code entity found by a particular MCTS query variant."""
+    chunk_id: str
+    name: str  # e.g. "UserService.findById"
+    file_path: str
+    chunk_type: str  # "method" | "class"
+    signature: str
+    bm25_score: float
+    semantic_score: float = 0.0
+    is_new: bool = False  # True if this entity wasn't found by root query
+
+
+class MCTSRewardComponents(BaseModel):
+    """Decomposed reward signal for visualization."""
+    bm25: float = 0.0
+    semantic: float = 0.0
+    llm: float = 0.0
+
+
+class MCTSNodeInfo(BaseModel):
+    id: int
+    query: str
+    parent_id: int | None = None
+    children_ids: list[int] = []
+    visits: int = 0
+    avg_reward: float = 0.0
+    is_best: bool = False
+    top_hits: list[MCTSHitInfo] = []
+    reward_components: MCTSRewardComponents = MCTSRewardComponents()
+
+
+class MCTSTraceInfo(BaseModel):
+    nodes: list[MCTSNodeInfo] = []
+    iterations: int = 0
+    best_path: list[int] = []
+    best_query: str = ""
+    original_query: str = ""
+
+
+class GraphMCTSNodeInfo(BaseModel):
+    """A node explored during Call Graph MCTS."""
+    chunk_id: str
+    name: str
+    file_path: str
+    visits: int = 0
+    avg_reward: float = 0.0
+    discovered_via: str = ""  # chunk_id of parent in exploration
+    relation: str = ""  # "calls" | "called_by"
+
+
+class GraphMCTSTraceInfo(BaseModel):
+    """Trace of the Call Graph MCTS exploration."""
+    explored_nodes: list[GraphMCTSNodeInfo] = []
+    total_nodes_visited: int = 0
+    discoveries_count: int = 0
 
 
 class SearchResponse(BaseModel):
@@ -37,3 +100,5 @@ class SearchResponse(BaseModel):
     expanded_keywords: list[str] = []
     results: list[SearchResult]
     search_time_ms: float
+    mcts_trace: MCTSTraceInfo | None = None
+    graph_mcts_trace: GraphMCTSTraceInfo | None = None

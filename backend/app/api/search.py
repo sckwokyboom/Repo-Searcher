@@ -35,4 +35,6 @@ async def search_code(repo_id: str, request: SearchRequest):
         expanded_keywords=results.get("expanded_keywords", []),
         results=results["results"],
         search_time_ms=round(elapsed, 1),
+        mcts_trace=results.get("mcts_trace"),
+        graph_mcts_trace=results.get("graph_mcts_trace"),
     )

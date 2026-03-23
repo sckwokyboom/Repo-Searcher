@@ -51,6 +51,66 @@ export interface SearchResult {
   rrf_score: number | null;
   callers: string[];
   callees: string[];
+  source: "search" | "graph_mcts";
+  discovered_via: string | null;
+  relation: string | null;
+}
+
+// --- MCTS Trace types ---
+
+export interface MCTSHit {
+  chunk_id: string;
+  name: string;
+  file_path: string;
+  chunk_type: string;
+  signature: string;
+  bm25_score: number;
+  semantic_score: number;
+  is_new: boolean;
+}
+
+export interface MCTSRewardComponents {
+  bm25: number;
+  semantic: number;
+  llm: number;
+}
+
+export interface MCTSNode {
+  id: number;
+  query: string;
+  parent_id: number | null;
+  children_ids: number[];
+  visits: number;
+  avg_reward: number;
+  is_best: boolean;
+  top_hits: MCTSHit[];
+  reward_components: MCTSRewardComponents;
+}
+
+export interface MCTSTrace {
+  nodes: MCTSNode[];
+  iterations: number;
+  best_path: number[];
+  best_query: string;
+  original_query: string;
+}
+
+// --- Graph MCTS types ---
+
+export interface GraphMCTSNode {
+  chunk_id: string;
+  name: string;
+  file_path: string;
+  visits: number;
+  avg_reward: number;
+  discovered_via: string;
+  relation: string;
+}
+
+export interface GraphMCTSTrace {
+  explored_nodes: GraphMCTSNode[];
+  total_nodes_visited: number;
+  discoveries_count: number;
 }
 
 export interface SearchResponse {
@@ -58,6 +118,8 @@ export interface SearchResponse {
   expanded_keywords: string[];
   results: SearchResult[];
   search_time_ms: number;
+  mcts_trace: MCTSTrace | null;
+  graph_mcts_trace: GraphMCTSTrace | null;
 }
 
 export interface CallGraphData {
