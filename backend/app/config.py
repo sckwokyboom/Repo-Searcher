@@ -14,8 +14,8 @@ class Settings(BaseSettings):
     bm25_top_k: int = 30
     faiss_top_k: int = 30
     rrf_k: int = 60
-    rrf_top_k: int = 5
-    reranker_top_k: int = 5
+    rrf_top_k: int = 30
+    reranker_top_k: int = 10
 
     embedding_batch_size: int = 32
     embedding_dim: int = 768

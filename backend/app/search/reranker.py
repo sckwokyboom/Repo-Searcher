@@ -20,16 +20,26 @@ def rerank(
     print(f"[Reranker] Starting reranking of {total} candidates for: {query[:50]}...", flush=True)
 
     for i, (chunk, rrf_score) in enumerate(candidates):
-        # Use signature + short body for faster inference
-        code_snippet = chunk.signature
+        # Include more context: file path, class name, method name, signature, and some body
+        context_parts = []
+        if chunk.file_path:
+            context_parts.append(f"File: {chunk.file_path}")
+        if chunk.class_name:
+            context_parts.append(f"Class: {chunk.class_name}")
+        if chunk.method_name:
+            context_parts.append(f"Method: {chunk.method_name}")
+        if chunk.signature:
+            context_parts.append(f"Signature: {chunk.signature}")
         if chunk.javadoc:
-            code_snippet = chunk.javadoc[:200] + "\n" + code_snippet
+            context_parts.append(f"Doc: {chunk.javadoc[:150]}")
+        code_context = "\n".join(context_parts)
 
         prompt = (
-            "Rate relevance 0-10.\n"
-            f"Query: {query}\n"
-            f"Code: {code_snippet[:500]}\n"
-            "Score:"
+            "Is this Java code relevant to the search query? "
+            "Answer with a single number from 0 (irrelevant) to 10 (perfect match).\n\n"
+            f"Query: {query}\n\n"
+            f"{code_context[:600]}\n\n"
+            "Relevance score (0-10):"
         )
 
         try:

@@ -359,9 +359,20 @@ class MCTSRewriter:
         for line in response.strip().split("\n"):
             cleaned = re.sub(r"^\s*\d+[\.\)]\s*", "", line).strip()
             cleaned = re.sub(r"^[-•]\s*", "", cleaned).strip()
+            # Remove "Rewrite N:" or "Rewrite N: " prefixes that Qwen sometimes generates
+            cleaned = re.sub(r"^(?:Rewrite\s*\d+\s*[:.]?\s*)", "", cleaned, flags=re.IGNORECASE).strip()
             cleaned = cleaned.strip('"\'')
-            if cleaned and len(cleaned) > 3 and cleaned.lower() != original.lower():
+            if (
+                cleaned
+                and len(cleaned) > 5
+                and cleaned.lower() != original.lower()
+                # Reject degenerate outputs
+                and not re.match(r"^rewrite\s*\d*", cleaned, re.IGNORECASE)
+            ):
                 variants.append(cleaned)
+        # If LLM failed to produce good variants, fall back to keyword extraction
+        if not variants:
+            variants.append(original)
         return variants
 
     def _extract_keywords(self, query: str) -> list[str]:

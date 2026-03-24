@@ -51,6 +51,8 @@ def parse_args():
                         help="Reuse cached raw_results.json")
     parser.add_argument("--max-k", type=int, default=20,
                         help="Max top-K to retrieve (should be >= max of --top-k)")
+    parser.add_argument("--exclude-repos", default="",
+                        help="Comma-separated repo names to exclude (e.g. 'hmislk/hmis,dotCMS/core')")
     return parser.parse_args()
 
 
@@ -221,6 +223,15 @@ def main():
 
     # Pipeline
     dataset = stage_extract(args)
+
+    # Exclude repos if specified
+    if args.exclude_repos:
+        exclude = {r.strip() for r in args.exclude_repos.split(",")}
+        dataset.repos = {k: v for k, v in dataset.repos.items() if k not in exclude}
+        dataset.total_samples = sum(len(s) for s in dataset.repos.values())
+        dataset.total_repos = len(dataset.repos)
+        print(f"After excluding {exclude}: {dataset.total_samples} samples across {dataset.total_repos} repos")
+
     dataset = stage_index(dataset, args.skip_index)
     results = stage_retrieve(dataset, retriever_names, max_k, args.skip_retrieve)
     eval_results = stage_evaluate(dataset, results, k_values)

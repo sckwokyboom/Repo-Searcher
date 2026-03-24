@@ -242,3 +242,74 @@ def plot_results(eval_results: EvalResults, output_dir: Path | None = None):
         plt.close()
 
     print(f"Plots saved to {output_dir}")
+
+
+def save_results_markdown(
+    eval_results: EvalResults,
+    k_values: list[int] | None = None,
+    output_path: Path | None = None,
+):
+    """Append benchmark results to a persistent markdown log."""
+    k_values = k_values or [1, 3, 5, 10, 20]
+    output_path = output_path or (RESULTS_DIR / "benchmark_log.md")
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    retrievers = [agg.retriever for agg in eval_results.per_retriever]
+    n_samples = eval_results.per_retriever[0].num_samples if eval_results.per_retriever else 0
+
+    lines = []
+    lines.append(f"\n## Run: {timestamp}")
+    lines.append(f"Samples: {n_samples} | Retrievers: {', '.join(retrievers)}\n")
+
+    # File-level table
+    lines.append("### File-Level Metrics")
+    header = "| Retriever |"
+    sep = "|-----------|"
+    for k in k_values:
+        header += f" R@{k} |"
+        sep += "------|"
+    header += " MRR | Hit@5 | Hit@10 |"
+    sep += "------|-------|--------|"
+    lines.append(header)
+    lines.append(sep)
+
+    for agg in eval_results.per_retriever:
+        row = f"| {agg.retriever} |"
+        for k in k_values:
+            row += f" {agg.recall_at_k.get(k, 0):.3f} |"
+        row += f" {agg.mrr:.3f} | {agg.hit_at_k.get(5, 0):.3f} | {agg.hit_at_k.get(10, 0):.3f} |"
+        lines.append(row)
+
+    # Per-repo breakdown
+    if eval_results.per_repo:
+        lines.append("\n### Per-Repository (Recall@5)")
+        header = "| Repository |"
+        sep = "|------------|"
+        for r in retrievers:
+            header += f" {r} |"
+            sep += "------|"
+        header += " N |"
+        sep += "---|"
+        lines.append(header)
+        lines.append(sep)
+
+        for repo, aggs in sorted(eval_results.per_repo.items()):
+            agg_by_name = {a.retriever: a for a in aggs}
+            row = f"| {repo} |"
+            for r in retrievers:
+                a = agg_by_name.get(r)
+                row += f" {a.recall_at_k.get(5, 0):.3f} |" if a else " - |"
+            row += f" {aggs[0].num_samples if aggs else 0} |"
+            lines.append(row)
+
+    lines.append("")
+
+    # Append to file (create with header if new)
+    if not output_path.exists():
+        with open(output_path, "w") as f:
+            f.write("# Retrieval Benchmark Results Log\n")
+
+    with open(output_path, "a") as f:
+        f.write("\n".join(lines) + "\n")
+
+    print(f"Results appended to {output_path}")

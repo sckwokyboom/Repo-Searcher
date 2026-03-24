@@ -93,7 +93,7 @@ class HybridRetriever:
         graph_expander = GraphExpander(self.repo_id)
         candidate_chunks = [(chunks[idx], rrf_score) for idx, rrf_score in top_candidates]
 
-        # Reranking
+        # Reranking — use original query (not rewritten) for relevance scoring
         reranked = rerank(query, candidate_chunks)
 
         # Build final results
