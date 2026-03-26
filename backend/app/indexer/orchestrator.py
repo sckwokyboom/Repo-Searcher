@@ -1,9 +1,16 @@
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Awaitable, Callable
 
 from app.config import settings
+from app.indexer.bm25_builder import build_bm25_index
+from app.indexer.callgraph_builder import build_call_graph
+from app.indexer.cloner import clone_repo
+from app.indexer.parser import parse_repository
+from app.indexer.store import save_indexes
+from app.indexer.vector_builder import build_vector_index
 from app.models.repo import IndexingProgress, IndexingStep, RepoInfo
 
 logger = logging.getLogger(__name__)
@@ -39,16 +46,12 @@ class IndexingOrchestrator:
 
     async def run(self):
         try:
-            # Step 1: Clone
-            await self._emit(IndexingStep.CLONING, 0.0, "Cloning repository...")
-            from app.indexer.cloner import clone_repo
+            await self._emit(IndexingStep.CLONING, 0.0, "cloning repository...")
 
             repo_path = await clone_repo(self.repo.url, self.repo.repo_id)
-            await self._emit(IndexingStep.CLONING, 1.0, "Clone complete")
+            await self._emit(IndexingStep.CLONING, 1.0, "clone complete")
 
-            # Step 2: Parse
-            await self._emit(IndexingStep.PARSING, 0.0, "Parsing Java files...")
-            from app.indexer.parser import parse_repository
+            await self._emit(IndexingStep.PARSING, 0.0, "parsing Java files...")
 
             chunks, java_files_count = await parse_repository(
                 repo_path,
@@ -67,44 +70,40 @@ class IndexingOrchestrator:
             )
 
             if not chunks:
-                await self._emit(IndexingStep.FAILED, 0.0, "No Java files found in repository")
+                await self._emit(
+                    IndexingStep.FAILED, 0.0, "no Java files in repository (((("
+                )
                 return
 
-            # Step 3: BM25
-            await self._emit(IndexingStep.BUILDING_BM25, 0.0, "Building BM25 index...")
-            from app.indexer.bm25_builder import build_bm25_index
+            await self._emit(IndexingStep.BUILDING_BM25, 0.0, "building BM25 index...")
 
             bm25_index, tokenized_corpus = build_bm25_index(chunks)
             await self._emit(IndexingStep.BUILDING_BM25, 1.0, "BM25 index built")
 
-            # Step 4: Vectors
-            await self._emit(IndexingStep.BUILDING_VECTORS, 0.0, "Building vector index...")
-            from app.indexer.vector_builder import build_vector_index
+            await self._emit(IndexingStep.BUILDING_VECTORS, 0.0, "indexing...")
 
             faiss_index = await build_vector_index(
                 chunks,
                 lambda progress: self._emit(
                     IndexingStep.BUILDING_VECTORS,
                     progress,
-                    f"Encoding chunks... {int(progress * 100)}%",
+                    f"encoding chunks... {int(progress * 100)}%",
                 ),
             )
-            await self._emit(IndexingStep.BUILDING_VECTORS, 1.0, "Vector index built")
+            await self._emit(IndexingStep.BUILDING_VECTORS, 1.0, "indexing done")
 
-            # Step 5: Call Graph
-            await self._emit(IndexingStep.BUILDING_CALLGRAPH, 0.0, "Building call graph...")
-            from app.indexer.callgraph_builder import build_call_graph
+            await self._emit(
+                IndexingStep.BUILDING_CALLGRAPH, 0.0, "building call graph..."
+            )
 
             call_graph = build_call_graph(chunks, repo_path)
             await self._emit(
                 IndexingStep.BUILDING_CALLGRAPH,
                 1.0,
-                f"Call graph built: {call_graph.number_of_nodes()} nodes, {call_graph.number_of_edges()} edges",
+                f"call graph: {call_graph.number_of_nodes()} nodes, {call_graph.number_of_edges()} edges",
             )
 
-            # Step 6: Save
-            await self._emit(IndexingStep.SAVING, 0.0, "Saving indexes...")
-            from app.indexer.store import save_indexes
+            await self._emit(IndexingStep.SAVING, 0.0, "saving indexes...")
 
             self.repo.chunk_count = len(chunks)
             save_indexes(
@@ -115,15 +114,14 @@ class IndexingOrchestrator:
                 faiss_index,
                 call_graph,
             )
-            await self._emit(IndexingStep.SAVING, 1.0, "Indexes saved")
+            await self._emit(IndexingStep.SAVING, 1.0, "indexes saved!!!!")
 
-            # Register in registry
             self._register_repo()
 
-            await self._emit(IndexingStep.DONE, 1.0, "Indexing complete!")
+            await self._emit(IndexingStep.DONE, 1.0, "indexing complete!!!!11!")
 
         except Exception as e:
-            logger.exception("Indexing failed")
+            logger.exception("Indexing failed D:")
             await self._emit(IndexingStep.FAILED, 0.0, f"Error: {str(e)}")
 
     def _register_repo(self):
@@ -134,8 +132,6 @@ class IndexingOrchestrator:
                 repos = json.load(f)
 
         repos = [r for r in repos if r["repo_id"] != self.repo.repo_id]
-
-        from datetime import datetime, timezone
 
         self.repo.indexed_at = datetime.now(timezone.utc)
         repos.insert(0, self.repo.model_dump(mode="json"))

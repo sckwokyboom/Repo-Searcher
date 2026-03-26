@@ -1,0 +1,17 @@
+[project]
+name = "repo-searcher"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "backend",
+    "benchmark"
+]
+
+[tool.uv.sources]
+backend = { workspace = true }
+benchmark = { workspace = true }
+
+[tool.uv.workspace]
+members = ["backend", "benchmark"]

@@ -1,6 +1,11 @@
-from typing import Literal
+from typing import Literal, TypedDict
 
 from pydantic import BaseModel
+
+
+class JavaClassInfo(TypedDict):
+    javadoc: str | None
+    name: str
 
 
 class CodeChunk(BaseModel):
@@ -40,6 +45,7 @@ class SearchResult(BaseModel):
 
 class MCTSHitInfo(BaseModel):
     """A code entity found by a particular MCTS query variant."""
+
     chunk_id: str
     name: str  # e.g. "UserService.findById"
     file_path: str
@@ -52,6 +58,7 @@ class MCTSHitInfo(BaseModel):
 
 class MCTSRewardComponents(BaseModel):
     """Decomposed reward signal for visualization."""
+
     bm25: float = 0.0
     semantic: float = 0.0
     llm: float = 0.0
@@ -79,6 +86,7 @@ class MCTSTraceInfo(BaseModel):
 
 class GraphMCTSNodeInfo(BaseModel):
     """A node explored during Call Graph MCTS."""
+
     chunk_id: str
     name: str
     file_path: str
@@ -90,6 +98,7 @@ class GraphMCTSNodeInfo(BaseModel):
 
 class GraphMCTSTraceInfo(BaseModel):
     """Trace of the Call Graph MCTS exploration."""
+
     explored_nodes: list[GraphMCTSNodeInfo] = []
     total_nodes_visited: int = 0
     discoveries_count: int = 0

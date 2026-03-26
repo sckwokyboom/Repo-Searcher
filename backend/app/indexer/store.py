@@ -26,18 +26,14 @@ def save_indexes(
     with open(index_dir / "chunks.json", "w") as f:
         json.dump([c.model_dump() for c in chunks], f)
 
-    # Save BM25
     with open(index_dir / "bm25.pkl", "wb") as f:
         pickle.dump({"bm25": bm25_index, "corpus": tokenized_corpus}, f)
 
-    # Save FAISS
     faiss.write_index(faiss_index, str(index_dir / "faiss.index"))
 
-    # Save Call Graph
     with open(index_dir / "callgraph.pkl", "wb") as f:
         pickle.dump(call_graph, f)
 
-    # Save metadata
     metadata = {
         "repo_info": repo.model_dump(mode="json"),
         "chunk_count": len(chunks),

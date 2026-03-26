@@ -13,7 +13,7 @@ from app.search.graph_mcts import GraphMCTS
 from app.search.mcts_rewriter import mcts_rewrite
 from app.search.reranker import rerank
 
-# Cache loaded indexes
+
 _index_cache: dict[str, dict] = {}
 
 
