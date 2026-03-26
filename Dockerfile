@@ -11,8 +11,15 @@ RUN wget -qO- https://astral.sh/uv/0.11.1/install.sh | sh
 
 COPY . ./app
 
+# Compile frontend
+WORKDIR /app/frontend
+RUN npm install
+RUN npm run build
+
 WORKDIR /app
 
 RUN uv sync
 
-CMD sh ./start_docker.sh
+EXPOSE 8000
+
+CMD ["uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
