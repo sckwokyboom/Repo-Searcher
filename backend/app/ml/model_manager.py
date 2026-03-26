@@ -1,8 +1,7 @@
 import logging
-from functools import lru_cache
+import threading
 from pathlib import Path
 
-import numpy as np
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -11,6 +10,7 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 _manager = None
+_manager_lock = threading.Lock()
 
 
 def get_device() -> str:
@@ -24,23 +24,12 @@ def get_device() -> str:
 class ModelManager:
     def __init__(self, lora_adapter_path: str | None = None):
         self.device = get_device()
-        self._unixcoder = None
-        self._unixcoder_tokenizer = None
         self._qwen = None
         self._qwen_tokenizer = None
         self._lora_adapter_path = lora_adapter_path
         logger.info(f"ModelManager initialized with device: {self.device}")
         if lora_adapter_path:
             logger.info(f"LoRA adapter will be loaded from: {lora_adapter_path}")
-
-    @property
-    def unixcoder(self):
-        if self._unixcoder is None:
-            from app.ml.unixcoder import UniXcoderWrapper
-
-            self._unixcoder = UniXcoderWrapper(self.device)
-            logger.info("UniXcoder loaded")
-        return self._unixcoder
 
     @property
     def qwen_tokenizer(self):
@@ -54,7 +43,6 @@ class ModelManager:
     @property
     def qwen(self):
         if self._qwen is None:
-            # Use float32 when LoRA is active (float16 segfaults on MPS with merged LoRA)
             use_lora = self._lora_adapter_path and Path(self._lora_adapter_path).exists()
             use_fp32 = use_lora or self.device == "cpu"
             dtype = torch.float32 if use_fp32 else torch.float16
@@ -78,11 +66,9 @@ class ModelManager:
             logger.info(f"Qwen model loaded ({dtype}, {self.device})")
         return self._qwen
 
-    def encode_code(self, texts: list[str]) -> np.ndarray:
-        return self.unixcoder.encode(texts)
-
-    def encode_query(self, text: str) -> np.ndarray:
-        return self.unixcoder.encode([text])
+    @property
+    def lora_adapter_path(self) -> str | None:
+        return self._lora_adapter_path
 
     def generate(self, prompt: str, max_new_tokens: int = 256) -> str:
         inputs = self.qwen_tokenizer(
@@ -92,7 +78,7 @@ class ModelManager:
             outputs = self.qwen.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens,
-                do_sample=False,  # Greedy — avoids nan issues on MPS float16
+                do_sample=False,
                 pad_token_id=self.qwen_tokenizer.eos_token_id,
             )
         new_tokens = outputs[0][inputs["input_ids"].shape[1]:]
@@ -101,20 +87,40 @@ class ModelManager:
 
 def get_model_manager(lora_adapter_path: str | None = None) -> ModelManager:
     global _manager
-    if _manager is None:
-        _manager = ModelManager(lora_adapter_path=lora_adapter_path)
-    return _manager
+    with _manager_lock:
+        if _manager is None:
+            _manager = ModelManager(lora_adapter_path=lora_adapter_path)
+        return _manager
+
+
+def ensure_lora_adapter(adapter_path: str | None) -> ModelManager:
+    """Ensure the ModelManager singleton uses the given LoRA adapter."""
+    global _manager
+    with _manager_lock:
+        current_path = _manager.lora_adapter_path if _manager else None
+        requested = str(adapter_path) if adapter_path else None
+        current = str(current_path) if current_path else None
+
+        if current != requested:
+            logger.info(f"Switching LoRA adapter: {current} -> {requested}")
+            _reset_manager_unsafe()
+            _manager = ModelManager(lora_adapter_path=requested)
+
+        return _manager
 
 
 def reset_model_manager():
     """Reset the singleton, e.g. to switch between LoRA and non-LoRA."""
+    with _manager_lock:
+        _reset_manager_unsafe()
+
+
+def _reset_manager_unsafe():
+    """Internal reset without lock — caller must hold _manager_lock."""
     global _manager
     if _manager is not None:
-        # Free GPU memory
         if _manager._qwen is not None:
             del _manager._qwen
-        if _manager._unixcoder is not None:
-            del _manager._unixcoder
         del _manager
         _manager = None
         torch.cuda.empty_cache() if torch.cuda.is_available() else None

@@ -12,6 +12,7 @@ export function useCodeSearch(repoId: string) {
       if (!query.trim()) return;
       setLoading(true);
       setError(null);
+      setResponse(null);
       try {
         const result = await executeSearch(repoId, query);
         setResponse(result);

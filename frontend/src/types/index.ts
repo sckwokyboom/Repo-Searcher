@@ -2,7 +2,6 @@ export type IndexingStep =
   | "cloning"
   | "parsing"
   | "building_bm25"
-  | "building_vectors"
   | "building_callgraph"
   | "saving"
   | "done"
@@ -19,6 +18,7 @@ export interface RepoInfo {
   language: string | null;
   indexed_at: string | null;
   chunk_count: number;
+  has_lora_adapter: boolean;
 }
 
 export interface IndexingProgress {
@@ -47,79 +47,66 @@ export interface SearchResult {
   chunk: CodeChunk;
   score: number;
   bm25_rank: number | null;
-  vector_rank: number | null;
-  rrf_score: number | null;
   callers: string[];
   callees: string[];
-  source: "search" | "graph_mcts";
-  discovered_via: string | null;
-  relation: string | null;
 }
 
-// --- MCTS Trace types ---
-
-export interface MCTSHit {
-  chunk_id: string;
-  name: string;
-  file_path: string;
-  chunk_type: string;
-  signature: string;
-  bm25_score: number;
-  semantic_score: number;
-  is_new: boolean;
-}
-
-export interface MCTSRewardComponents {
-  bm25: number;
-  semantic: number;
-  llm: number;
-}
-
-export interface MCTSNode {
-  id: number;
-  query: string;
-  parent_id: number | null;
-  children_ids: number[];
-  visits: number;
-  avg_reward: number;
-  is_best: boolean;
-  top_hits: MCTSHit[];
-  reward_components: MCTSRewardComponents;
-}
-
-export interface MCTSTrace {
-  nodes: MCTSNode[];
-  iterations: number;
-  best_path: number[];
-  best_query: string;
-  original_query: string;
-}
-
-// --- Graph MCTS types ---
-
-export interface GraphMCTSNode {
-  chunk_id: string;
-  name: string;
-  file_path: string;
-  visits: number;
-  avg_reward: number;
-  discovered_via: string;
-  relation: string;
-}
-
-export interface GraphMCTSTrace {
-  explored_nodes: GraphMCTSNode[];
-  total_nodes_visited: number;
-  discoveries_count: number;
+export interface RewriteDetails {
+  intent: string | null;
+  search_scope: string | null;
+  keywords: string[];
+  project_terms: string[];
+  method_hints: string[];
+  api_hints: string[];
+  search_queries: string[];
 }
 
 export interface SearchResponse {
   query: string;
+  rewritten_query: string | null;
   expanded_keywords: string[];
+  rewrite_details: RewriteDetails | null;
   results: SearchResult[];
   search_time_ms: number;
-  mcts_trace: MCTSTrace | null;
-  graph_mcts_trace: GraphMCTSTrace | null;
+  lora_active: boolean;
+}
+
+// --- LoRA Training types ---
+
+export type LoRATrainingStep =
+  | "preparing_data"
+  | "training"
+  | "saving"
+  | "done"
+  | "failed"
+  | "cancelled";
+
+export interface LoRATrainingProgress {
+  repo_id: string;
+  step: LoRATrainingStep;
+  progress: number;
+  message: string;
+  epoch: number;
+  total_epochs: number;
+  train_loss: number | null;
+  eval_loss: number | null;
+  estimated_time_remaining_sec: number | null;
+}
+
+export interface LoRAStatus {
+  repo_id: string;
+  has_adapter: boolean;
+  active_adapter_id: string | null;
+  is_training: boolean;
+  estimated_minutes: number | null;
+}
+
+export interface LoRAAdapterInfo {
+  adapter_id: string;
+  name: string;
+  description: string;
+  source: "bundled" | "trained";
+  trained_for_repo: string | null;
 }
 
 export interface CallGraphData {

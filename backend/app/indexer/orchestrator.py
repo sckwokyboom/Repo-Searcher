@@ -77,21 +77,7 @@ class IndexingOrchestrator:
             bm25_index, tokenized_corpus = build_bm25_index(chunks)
             await self._emit(IndexingStep.BUILDING_BM25, 1.0, "BM25 index built")
 
-            # Step 4: Vectors
-            await self._emit(IndexingStep.BUILDING_VECTORS, 0.0, "Building vector index...")
-            from app.indexer.vector_builder import build_vector_index
-
-            faiss_index = await build_vector_index(
-                chunks,
-                lambda progress: self._emit(
-                    IndexingStep.BUILDING_VECTORS,
-                    progress,
-                    f"Encoding chunks... {int(progress * 100)}%",
-                ),
-            )
-            await self._emit(IndexingStep.BUILDING_VECTORS, 1.0, "Vector index built")
-
-            # Step 5: Call Graph
+            # Step 4: Call Graph
             await self._emit(IndexingStep.BUILDING_CALLGRAPH, 0.0, "Building call graph...")
             from app.indexer.callgraph_builder import build_call_graph
 
@@ -112,7 +98,6 @@ class IndexingOrchestrator:
                 chunks,
                 bm25_index,
                 tokenized_corpus,
-                faiss_index,
                 call_graph,
             )
             await self._emit(IndexingStep.SAVING, 1.0, "Indexes saved")

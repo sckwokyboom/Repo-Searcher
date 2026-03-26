@@ -8,26 +8,22 @@ class Settings(BaseSettings):
     repos_dir: Path = Path(__file__).parent.parent / "data" / "repos"
     indexes_dir: Path = Path(__file__).parent.parent / "data" / "indexes"
 
-    unixcoder_model: str = "microsoft/unixcoder-base"
     qwen_model: str = "Qwen/Qwen2.5-Coder-1.5B"
 
     bm25_top_k: int = 30
-    faiss_top_k: int = 30
-    rrf_k: int = 60
-    rrf_top_k: int = 30
-    reranker_top_k: int = 10
-
-    embedding_batch_size: int = 32
-    embedding_dim: int = 768
-
-    mcts_iterations: int = 2
-    mcts_children: int = 3
-
-    graph_mcts_iterations: int = 3
-    graph_mcts_reward_threshold: float = 0.3
-    graph_mcts_max_discoveries: int = 3
 
     frontend_url: str = "http://localhost:5173"
+
+    # LoRA settings
+    lora_adapters_dir: Path = Path(__file__).parent.parent / "data" / "lora_adapters"
+    default_lora_repo_id: str = "jdereg__java-util"
+    default_lora_adapter_path: Path = (
+        Path(__file__).parent.parent.parent / "benchmark" / "lora_training" / "output" / "rewriter_lora_v2" / "final"
+    )
+    lora_epochs: int = 3
+    lora_batch_size: int = 2
+    lora_gradient_accumulation: int = 8
+    lora_lr: float = 1e-4
 
     model_config = {"env_prefix": "CODEGRAPH_", "env_file": ".env"}
 
@@ -36,3 +32,4 @@ settings = Settings()
 
 settings.repos_dir.mkdir(parents=True, exist_ok=True)
 settings.indexes_dir.mkdir(parents=True, exist_ok=True)
+settings.lora_adapters_dir.mkdir(parents=True, exist_ok=True)
