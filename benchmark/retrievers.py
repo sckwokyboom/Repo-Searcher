@@ -1,5 +1,6 @@
 """Pluggable retriever implementations for benchmarking."""
 
+import re
 import sys
 import time
 from abc import ABC, abstractmethod
@@ -10,6 +11,8 @@ import numpy as np
 
 # Ensure backend is importable
 sys.path.insert(0, str(Path(__file__).parent.parent / "backend"))
+
+import networkx as nx
 
 from app.config import settings
 from app.indexer.bm25_builder import tokenize
@@ -538,6 +541,486 @@ class BM25LoRAFileAgg(BaseRetriever):
         return [(file_best_chunk[fp][0], agg_score) for fp, agg_score in sorted_files]
 
 
+# --- Graph expansion helpers ---
+
+def _build_file_chunk_index(chunks: list[CodeChunk]) -> dict[str, list[int]]:
+    """Map file_path -> list of chunk indices belonging to that file."""
+    index: dict[str, list[int]] = defaultdict(list)
+    for i, chunk in enumerate(chunks):
+        index[chunk.file_path].append(i)
+    return index
+
+
+def _build_chunk_id_index(chunks: list[CodeChunk]) -> dict[str, int]:
+    """Map chunk_id -> index in chunks list."""
+    return {chunk.chunk_id: i for i, chunk in enumerate(chunks)}
+
+
+_call_graph_cache: dict[str, nx.DiGraph] = {}
+
+
+def _get_call_graph(repo_id: str) -> nx.DiGraph:
+    if repo_id not in _call_graph_cache:
+        _call_graph_cache[repo_id] = load_call_graph(repo_id)
+    return _call_graph_cache[repo_id]
+
+
+def compute_prior_score(
+    query: str,
+    candidate_chunk: CodeChunk,
+    seed_file_path: str,
+) -> float:
+    """Cheap relevance prior for graph neighbor ranking.
+
+    prior = 2.0 * identifier_overlap + 1.0 * token_overlap
+            + 0.5 * package_match - 1.0 * test_penalty
+    """
+    query_tokens = set(tokenize(query))
+    if not query_tokens:
+        return 0.0
+
+    # identifier_overlap: query tokens vs file/class/method name tokens
+    id_text = (candidate_chunk.file_path or "") + " " + (candidate_chunk.class_name or "") + " " + (candidate_chunk.method_name or "")
+    id_tokens = set(tokenize(id_text))
+    union = query_tokens | id_tokens
+    identifier_overlap = len(query_tokens & id_tokens) / max(1, len(union))
+
+    # token_overlap: query tokens vs synopsis tokens (first 200 chars)
+    synopsis = (candidate_chunk.text_representation or "")[:200]
+    synopsis_tokens = set(tokenize(synopsis))
+    token_overlap = len(query_tokens & synopsis_tokens) / max(1, len(query_tokens))
+
+    # package_match: same directory
+    seed_dir = seed_file_path.rsplit("/", 1)[0] if "/" in seed_file_path else ""
+    cand_dir = candidate_chunk.file_path.rsplit("/", 1)[0] if "/" in (candidate_chunk.file_path or "") else ""
+    package_match = 1.0 if seed_dir and cand_dir and seed_dir == cand_dir else 0.0
+
+    # test_penalty: penalize test files when query is not about tests
+    test_penalty = 0.0
+    if re.search(r'(?i)(Test|Coverage|Internal|Mock|Stub)', candidate_chunk.file_path or ""):
+        if "test" not in query.lower():
+            test_penalty = 1.0
+
+    return 2.0 * identifier_overlap + 1.0 * token_overlap + 0.5 * package_match - 1.0 * test_penalty
+
+
+class SafeGraphExpansionV2(BaseRetriever):
+    """BM25+FileAgg with safe graph expansion v2.
+
+    Key improvements over Mode B:
+    1. Freeze top-5 baseline positions — graph can only affect 6-10
+    2. Prior-ranked neighbors — sort by cheap relevance prior
+    3. Weaker graph score with safety discount
+    """
+    name = "BM25+SafeGraphV2"
+
+    FREEZE_K = 5
+    SEED_K = 5
+    RAW_NEIGHBORS_LIMIT = 10
+    PRIOR_TOP_N = 5
+    GRAPH_WEIGHT = 0.5
+    ADDITIVE_ALPHA = 0.1
+    HUB_DEGREE_LIMIT = 50
+    EDGE_DIRECTION = "both"  # "outgoing", "incoming", "both"
+
+    def __init__(self, repo_id: str, edge_direction: str = "both"):
+        super().__init__(repo_id)
+        self._call_graph = None
+        self.EDGE_DIRECTION = edge_direction
+
+    @property
+    def call_graph(self) -> nx.DiGraph:
+        if self._call_graph is None:
+            self._call_graph = _get_call_graph(self.repo_id)
+        return self._call_graph
+
+    def _get_graph_neighbors(self, chunk_id: str, graph: nx.DiGraph) -> list[tuple[str, str]]:
+        """Get neighbor chunk_ids based on edge direction. Returns (neighbor_id, direction)."""
+        neighbors = []
+        if self.EDGE_DIRECTION in ("outgoing", "both"):
+            for nid in graph.successors(chunk_id):
+                neighbors.append((nid, "outgoing"))
+        if self.EDGE_DIRECTION in ("incoming", "both"):
+            for nid in graph.predecessors(chunk_id):
+                neighbors.append((nid, "incoming"))
+        return neighbors
+
+    def retrieve(self, query: str, top_k: int = 10) -> list[tuple[CodeChunk, float]]:
+        results, _ = self.retrieve_with_diagnostics(query, top_k)
+        return results
+
+    def retrieve_with_diagnostics(
+        self, query: str, top_k: int = 10,
+    ) -> tuple[list[tuple[CodeChunk, float]], dict]:
+        diagnostics = {
+            "baseline_top10": [],
+            "frozen_top5": [],
+            "raw_neighbors": [],
+            "filtered_neighbors": [],
+            "graph_candidates": [],
+        }
+
+        tokenized_query = tokenize(query)
+        if not tokenized_query:
+            return [], diagnostics
+
+        bm25_scores = self.bm25.get_scores(tokenized_query)
+
+        # File-level aggregation
+        file_agg: dict[str, float] = defaultdict(float)
+        file_best_chunk: dict[str, int] = {}
+        for i, score in enumerate(bm25_scores):
+            if score > 0:
+                fp = self.chunks[i].file_path
+                file_agg[fp] += score
+                if fp not in file_best_chunk or score > bm25_scores[file_best_chunk[fp]]:
+                    file_best_chunk[fp] = i
+
+        if not file_agg:
+            return [], diagnostics
+
+        max_file_score = max(file_agg.values())
+        baseline_norm: dict[str, float] = {fp: s / max_file_score for fp, s in file_agg.items()}
+
+        baseline_ranked = sorted(baseline_norm.items(), key=lambda x: x[1], reverse=True)
+
+        # Freeze top-5
+        frozen_top5 = baseline_ranked[:self.FREEZE_K]
+        frozen_fps = {fp for fp, _ in frozen_top5}
+        seed_files = baseline_ranked[:self.SEED_K]
+
+        diagnostics["baseline_top10"] = [(fp, sc) for fp, sc in baseline_ranked[:10]]
+        diagnostics["frozen_top5"] = [(fp, sc) for fp, sc in frozen_top5]
+
+        file_chunk_idx = _build_file_chunk_index(self.chunks)
+        chunk_id_idx = _build_chunk_id_index(self.chunks)
+
+        try:
+            graph = self.call_graph
+        except Exception:
+            # No call graph — fall back to baseline
+            results = []
+            for fp, score in baseline_ranked[:top_k]:
+                ci = file_best_chunk.get(fp)
+                if ci is not None:
+                    results.append((self.chunks[ci], score))
+            return results, diagnostics
+
+        # Collect raw graph neighbors per seed
+        raw_neighbors: list[dict] = []  # {seed_fp, candidate_fp, candidate_chunk, direction, seed_norm}
+        for seed_fp, seed_norm_score in seed_files:
+            neighbor_count = 0
+            seen_fps_this_seed: set[str] = set()
+            for ci in file_chunk_idx.get(seed_fp, []):
+                if neighbor_count >= self.RAW_NEIGHBORS_LIMIT:
+                    break
+                chunk_id = self.chunks[ci].chunk_id
+                if chunk_id not in graph:
+                    continue
+                if graph.degree(chunk_id) > self.HUB_DEGREE_LIMIT:
+                    continue
+                for nid, direction in self._get_graph_neighbors(chunk_id, graph):
+                    if neighbor_count >= self.RAW_NEIGHBORS_LIMIT:
+                        break
+                    ni = chunk_id_idx.get(nid)
+                    if ni is None:
+                        continue
+                    nfp = self.chunks[ni].file_path
+                    if nfp in frozen_fps or nfp == seed_fp:
+                        continue
+                    if nfp in seen_fps_this_seed:
+                        continue
+                    seen_fps_this_seed.add(nfp)
+                    raw_neighbors.append({
+                        "seed_fp": seed_fp,
+                        "seed_norm": seed_norm_score,
+                        "candidate_fp": nfp,
+                        "candidate_chunk": self.chunks[ni],
+                        "direction": direction,
+                    })
+                    neighbor_count += 1
+
+        diagnostics["raw_neighbors"] = [
+            {"seed": n["seed_fp"], "candidate": n["candidate_fp"], "direction": n["direction"]}
+            for n in raw_neighbors
+        ]
+
+        # Compute prior scores and deduplicate at file level (keep best)
+        candidate_map: dict[str, dict] = {}  # fp -> best neighbor entry with prior
+        for n in raw_neighbors:
+            prior = compute_prior_score(query, n["candidate_chunk"], n["seed_fp"])
+            n["prior_score"] = prior
+            fp = n["candidate_fp"]
+            if fp not in candidate_map or prior > candidate_map[fp]["prior_score"]:
+                candidate_map[fp] = n
+
+        # Sort by prior, take top-N
+        sorted_candidates = sorted(candidate_map.values(), key=lambda x: x["prior_score"], reverse=True)
+        filtered = sorted_candidates[:self.PRIOR_TOP_N]
+
+        diagnostics["filtered_neighbors"] = [
+            {"candidate": c["candidate_fp"], "prior": c["prior_score"], "seed": c["seed_fp"], "direction": c["direction"]}
+            for c in filtered
+        ]
+
+        # Compute graph scores
+        max_prior = max((c["prior_score"] for c in filtered), default=1.0)
+        if max_prior <= 0:
+            max_prior = 1.0
+
+        graph_scores: dict[str, float] = {}
+        for c in filtered:
+            prior_norm = max(0.0, c["prior_score"]) / max_prior
+            gs = c["seed_norm"] * prior_norm * self.GRAPH_WEIGHT
+            fp = c["candidate_fp"]
+            graph_scores[fp] = max(graph_scores.get(fp, 0.0), gs)
+
+        diagnostics["graph_candidates"] = [
+            {"candidate": fp, "graph_score": gs} for fp, gs in graph_scores.items()
+        ]
+
+        # Merge for positions outside frozen top-5
+        remaining_scores: dict[str, float] = {}
+        for fp, bl in baseline_norm.items():
+            if fp in frozen_fps:
+                continue
+            gs = graph_scores.get(fp, 0.0)
+            remaining_scores[fp] = bl + self.ADDITIVE_ALPHA * gs
+
+        # Add graph-only candidates
+        for fp, gs in graph_scores.items():
+            if fp not in remaining_scores and fp not in frozen_fps:
+                remaining_scores[fp] = gs
+
+        remaining_ranked = sorted(remaining_scores.items(), key=lambda x: x[1], reverse=True)
+        slots_left = top_k - len(frozen_top5)
+
+        # Build result: frozen top-5 + best remaining
+        results = []
+        for fp, score in frozen_top5:
+            ci = file_best_chunk.get(fp)
+            if ci is not None:
+                results.append((self.chunks[ci], score))
+
+        for fp, score in remaining_ranked[:slots_left]:
+            ci = file_best_chunk.get(fp)
+            if ci is not None:
+                results.append((self.chunks[ci], score))
+            else:
+                idxs = file_chunk_idx.get(fp, [])
+                if idxs:
+                    results.append((self.chunks[idxs[0]], score))
+
+        return results, diagnostics
+
+
+class BM25GraphExpansion(BaseRetriever):
+    """BM25+FileAgg baseline then 1-hop graph expansion from top seed files (Mode B).
+
+    Graph neighbors get score = seed_score * EDGE_WEIGHT.
+    Files in both baseline and graph get a boost: final = baseline + BOOST * graph.
+    Files only in graph get their graph score.
+    All files re-ranked by final score.
+    """
+    name = "BM25+GraphExpand"
+
+    SEED_K = 5
+    NEIGHBORS_PER_SEED = 5  # max neighbor files per seed
+    EDGE_WEIGHT = 1.0       # method call = strongest edge
+    BOOST = 0.2             # additive boost for files in both baseline and graph
+    HUB_DEGREE_LIMIT = 50
+
+    def __init__(self, repo_id: str):
+        super().__init__(repo_id)
+        self._call_graph = None
+
+    @property
+    def call_graph(self) -> nx.DiGraph:
+        if self._call_graph is None:
+            self._call_graph = _get_call_graph(self.repo_id)
+        return self._call_graph
+
+    def retrieve(self, query: str, top_k: int = 10) -> list[tuple[CodeChunk, float]]:
+        # Step 1: BM25FileAgg — get ALL file scores (not just top-k)
+        tokenized_query = tokenize(query)
+        if not tokenized_query:
+            return []
+        bm25_scores = self.bm25.get_scores(tokenized_query)
+
+        # File-level aggregation
+        file_agg: dict[str, float] = defaultdict(float)
+        file_best_chunk: dict[str, int] = {}
+        for i, score in enumerate(bm25_scores):
+            if score > 0:
+                fp = self.chunks[i].file_path
+                file_agg[fp] += score
+                if fp not in file_best_chunk or score > bm25_scores[file_best_chunk[fp]]:
+                    file_best_chunk[fp] = i
+
+        # Normalize file scores to [0, 1] for fair comparison
+        max_file_score = max(file_agg.values()) if file_agg else 1.0
+        baseline_norm: dict[str, float] = {fp: s / max_file_score for fp, s in file_agg.items()}
+
+        # Baseline ranking
+        baseline_ranked = sorted(baseline_norm.items(), key=lambda x: x[1], reverse=True)
+        seed_files = baseline_ranked[:self.SEED_K]
+
+        file_chunk_idx = _build_file_chunk_index(self.chunks)
+        chunk_id_idx = _build_chunk_id_index(self.chunks)
+        graph = self.call_graph
+
+        # Step 2: Expand — collect graph neighbor scores
+        graph_scores: dict[str, float] = {}  # fp -> best graph score (normalized)
+        for seed_fp, seed_norm_score in seed_files:
+            neighbor_count = 0
+            for ci in file_chunk_idx.get(seed_fp, []):
+                chunk_id = self.chunks[ci].chunk_id
+                if chunk_id not in graph:
+                    continue
+                if graph.degree(chunk_id) > self.HUB_DEGREE_LIMIT:
+                    continue
+                for nid in list(graph.predecessors(chunk_id)) + list(graph.successors(chunk_id)):
+                    ni = chunk_id_idx.get(nid)
+                    if ni is None:
+                        continue
+                    nfp = self.chunks[ni].file_path
+                    gs = seed_norm_score * self.EDGE_WEIGHT
+                    if nfp not in graph_scores or gs > graph_scores[nfp]:
+                        graph_scores[nfp] = gs
+                    neighbor_count += 1
+                    if neighbor_count >= self.NEIGHBORS_PER_SEED:
+                        break
+                if neighbor_count >= self.NEIGHBORS_PER_SEED:
+                    break
+
+        # Step 3: Merge scores
+        final_scores: dict[str, float] = {}
+        all_fps = set(baseline_norm.keys()) | set(graph_scores.keys())
+        for fp in all_fps:
+            bl = baseline_norm.get(fp, 0.0)
+            gs = graph_scores.get(fp, 0.0)
+            if bl > 0 and gs > 0:
+                final_scores[fp] = bl + self.BOOST * gs
+            elif bl > 0:
+                final_scores[fp] = bl
+            else:
+                final_scores[fp] = gs
+
+        # Step 4: Rank and return
+        sorted_files = sorted(final_scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
+        results = []
+        for fp, score in sorted_files:
+            ci = file_best_chunk.get(fp)
+            if ci is not None:
+                results.append((self.chunks[ci], score))
+            else:
+                idxs = file_chunk_idx.get(fp, [])
+                if idxs:
+                    results.append((self.chunks[idxs[0]], score))
+        return results
+
+
+class BM25PrioritizedExpansion(BaseRetriever):
+    """BM25+FileAgg with prioritized graph expansion (Mode C).
+
+    Like Mode B but:
+    - Budget-limited: max MAX_TOTAL_EXPANDED new files
+    - Seeds processed in score order (best first)
+    - Graph neighbors scored by combining their own BM25 signal with graph
+      proximity: score = neighbor_bm25_norm + GRAPH_BONUS * seed_norm
+    """
+    name = "BM25+PriorExpand"
+
+    SEED_K = 5
+    MAX_TOTAL_EXPANDED = 15
+    GRAPH_BONUS = 0.3      # bonus from graph proximity
+    HUB_DEGREE_LIMIT = 50
+
+    def __init__(self, repo_id: str):
+        super().__init__(repo_id)
+        self._call_graph = None
+
+    @property
+    def call_graph(self) -> nx.DiGraph:
+        if self._call_graph is None:
+            self._call_graph = _get_call_graph(self.repo_id)
+        return self._call_graph
+
+    def retrieve(self, query: str, top_k: int = 10) -> list[tuple[CodeChunk, float]]:
+        tokenized_query = tokenize(query)
+        if not tokenized_query:
+            return []
+        bm25_scores = self.bm25.get_scores(tokenized_query)
+
+        # File-level aggregation
+        file_agg: dict[str, float] = defaultdict(float)
+        file_best_chunk: dict[str, int] = {}
+        for i, score in enumerate(bm25_scores):
+            if score > 0:
+                fp = self.chunks[i].file_path
+                file_agg[fp] += score
+                if fp not in file_best_chunk or score > bm25_scores[file_best_chunk[fp]]:
+                    file_best_chunk[fp] = i
+
+        max_file_score = max(file_agg.values()) if file_agg else 1.0
+        baseline_norm: dict[str, float] = {fp: s / max_file_score for fp, s in file_agg.items()}
+
+        baseline_ranked = sorted(baseline_norm.items(), key=lambda x: x[1], reverse=True)
+        seed_files = baseline_ranked[:self.SEED_K]
+
+        file_chunk_idx = _build_file_chunk_index(self.chunks)
+        chunk_id_idx = _build_chunk_id_index(self.chunks)
+        graph = self.call_graph
+
+        # Prioritized expansion with budget
+        graph_bonus: dict[str, float] = {}  # extra score from graph proximity
+        new_count = 0
+
+        for seed_fp, seed_norm in seed_files:
+            if new_count >= self.MAX_TOTAL_EXPANDED:
+                break
+            for ci in file_chunk_idx.get(seed_fp, []):
+                if new_count >= self.MAX_TOTAL_EXPANDED:
+                    break
+                chunk_id = self.chunks[ci].chunk_id
+                if chunk_id not in graph:
+                    continue
+                if graph.degree(chunk_id) > self.HUB_DEGREE_LIMIT:
+                    continue
+                for nid in list(graph.predecessors(chunk_id)) + list(graph.successors(chunk_id)):
+                    if new_count >= self.MAX_TOTAL_EXPANDED:
+                        break
+                    ni = chunk_id_idx.get(nid)
+                    if ni is None:
+                        continue
+                    nfp = self.chunks[ni].file_path
+                    bonus = seed_norm * self.GRAPH_BONUS
+                    if nfp not in graph_bonus:
+                        new_count += 1
+                    if nfp not in graph_bonus or bonus > graph_bonus[nfp]:
+                        graph_bonus[nfp] = bonus
+
+        # Merge: for each file, final = baseline_norm + graph_bonus
+        final_scores: dict[str, float] = {}
+        all_fps = set(baseline_norm.keys()) | set(graph_bonus.keys())
+        for fp in all_fps:
+            bl = baseline_norm.get(fp, 0.0)
+            gb = graph_bonus.get(fp, 0.0)
+            final_scores[fp] = bl + gb
+
+        sorted_files = sorted(final_scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
+        results = []
+        for fp, score in sorted_files:
+            ci = file_best_chunk.get(fp)
+            if ci is not None:
+                results.append((self.chunks[ci], score))
+            else:
+                idxs = file_chunk_idx.get(fp, [])
+                if idxs:
+                    results.append((self.chunks[idxs[0]], score))
+        return results
+
+
 RETRIEVER_REGISTRY: dict[str, type[BaseRetriever]] = {
     "bm25": BM25Only,
     "vector": VectorOnly,
@@ -552,6 +1035,9 @@ RETRIEVER_REGISTRY: dict[str, type[BaseRetriever]] = {
     "bm25_lora_rerank": BM25LoRARerank,
     "bm25_qwen_rerank": BM25BaseQwenRerank,
     "bm25_lora_fileagg": BM25LoRAFileAgg,
+    "bm25_graph_expand": BM25GraphExpansion,
+    "bm25_prior_expand": BM25PrioritizedExpansion,
+    "bm25_safe_graph_v2": SafeGraphExpansionV2,
 }
 
 
