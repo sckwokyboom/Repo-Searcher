@@ -6,12 +6,19 @@ import torch  # noqa: F401, E402
 import faiss  # noqa: F401, E402
 
 from contextlib import asynccontextmanager
+from pathlib import Path
+import logging
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import repos, search, graph, ws
 from app.config import settings
+
+
+logger = logging.getLogger("uvicorn.startup")
 
 
 @asynccontextmanager
@@ -25,6 +32,22 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+
+logger.info("starting...")
+if settings.dist_path.is_dir():
+    logger.info(f"Found dist path: {settings.dist_path}")
+    app.mount("/assets", StaticFiles(directory=settings.dist_path / "assets"), name="static")
+
+    @app.get("/{full_path:path}")
+    async def serve_react_app(full_path: str):
+        file_path = settings.dist_path / full_path
+        
+        if file_path.exists() and file_path.is_file():
+            return FileResponse(file_path)
+            
+        return FileResponse(settings.dist_path / "index.html")
+
 
 app.add_middleware(
     CORSMiddleware,

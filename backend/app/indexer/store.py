@@ -5,6 +5,7 @@ from pathlib import Path
 import faiss
 import networkx as nx
 import numpy as np
+from rank_bm25 import BM25Okapi
 
 from app.config import settings
 from app.models.repo import RepoInfo
@@ -14,7 +15,7 @@ from app.models.search import CodeChunk
 def save_indexes(
     repo: RepoInfo,
     chunks: list[CodeChunk],
-    bm25_index,
+    bm25_index: BM25Okapi,
     tokenized_corpus: list[list[str]],
     faiss_index: faiss.IndexFlatIP,
     call_graph: nx.DiGraph,
@@ -22,7 +23,6 @@ def save_indexes(
     index_dir = settings.indexes_dir / repo.repo_id
     index_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save chunks
     with open(index_dir / "chunks.json", "w") as f:
         json.dump([c.model_dump() for c in chunks], f)
 
@@ -49,7 +49,7 @@ def load_chunks(repo_id: str) -> list[CodeChunk]:
     return [CodeChunk(**c) for c in data]
 
 
-def load_bm25(repo_id: str):
+def load_bm25(repo_id: str) -> tuple[BM25Okapi, list[list[str]]]:
     path = settings.indexes_dir / repo_id / "bm25.pkl"
     with open(path, "rb") as f:
         data = pickle.load(f)

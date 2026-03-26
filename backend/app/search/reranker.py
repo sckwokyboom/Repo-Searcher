@@ -17,10 +17,9 @@ def rerank(
     manager = get_model_manager()
     scored = []
     total = len(candidates)
-    print(f"[Reranker] Starting reranking of {total} candidates for: {query[:50]}...", flush=True)
+    logger.info(f"Reranker: {total} candidates")
 
     for i, (chunk, rrf_score) in enumerate(candidates):
-        # Include more context: file path, class name, method name, signature, and some body
         context_parts = []
         if chunk.file_path:
             context_parts.append(f"File: {chunk.file_path}")
@@ -51,12 +50,14 @@ def rerank(
             else:
                 score = rrf_score * 10
         except Exception as e:
-            print(f"[Reranker] Error for {chunk.chunk_id}: {e}", flush=True)
+            logger.error(f"Reranker: LLM error: {e}")
             score = rrf_score * 10
 
-        print(f"[Reranker] {i+1}/{total}: {chunk.chunk_id[:50]} -> {score:.1f}", flush=True)
+        logger.info(
+            f"Reranker: {i+1}/{total}: {chunk.signature} ({rrf_score:.2f} -> {score:.2f})",
+        )
         scored.append((chunk, score))
 
     scored.sort(key=lambda x: x[1], reverse=True)
-    print(f"[Reranker] Done!", flush=True)
+    logger.info(f"Reranker: sorted {len(scored)} candidates")
     return scored

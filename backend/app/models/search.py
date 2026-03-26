@@ -35,30 +35,23 @@ class SearchResult(BaseModel):
     rrf_score: float | None = None
     callers: list[str] = []
     callees: list[str] = []
-    source: str = "search"  # "search" | "graph_mcts"
-    discovered_via: str | None = None  # chunk_id of the node that led to discovery
-    relation: str | None = None  # "calls" | "called_by"
-
-
-# --- MCTS Trace models ---
+    source: str = "search"
+    discovered_via: str | None = None
+    relation: str | None = None
 
 
 class MCTSHitInfo(BaseModel):
-    """A code entity found by a particular MCTS query variant."""
-
     chunk_id: str
-    name: str  # e.g. "UserService.findById"
+    name: str
     file_path: str
-    chunk_type: str  # "method" | "class"
+    chunk_type: str
     signature: str
     bm25_score: float
     semantic_score: float = 0.0
-    is_new: bool = False  # True if this entity wasn't found by root query
+    is_new: bool = False
 
 
 class MCTSRewardComponents(BaseModel):
-    """Decomposed reward signal for visualization."""
-
     bm25: float = 0.0
     semantic: float = 0.0
     llm: float = 0.0
@@ -85,20 +78,16 @@ class MCTSTraceInfo(BaseModel):
 
 
 class GraphMCTSNodeInfo(BaseModel):
-    """A node explored during Call Graph MCTS."""
-
     chunk_id: str
     name: str
     file_path: str
     visits: int = 0
     avg_reward: float = 0.0
-    discovered_via: str = ""  # chunk_id of parent in exploration
-    relation: str = ""  # "calls" | "called_by"
+    discovered_via: str = ""
+    relation: str = ""
 
 
 class GraphMCTSTraceInfo(BaseModel):
-    """Trace of the Call Graph MCTS exploration."""
-
     explored_nodes: list[GraphMCTSNodeInfo] = []
     total_nodes_visited: int = 0
     discoveries_count: int = 0

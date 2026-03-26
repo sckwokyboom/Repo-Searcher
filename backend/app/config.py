@@ -1,4 +1,5 @@
 from pathlib import Path
+
 from pydantic_settings import BaseSettings
 
 
@@ -28,6 +29,7 @@ class Settings(BaseSettings):
     graph_mcts_max_discoveries: int = 3
 
     frontend_url: str = "http://localhost:5173"
+    dist_path: Path = Path(__file__).parent.parent.parent / "frontend" / "dist"
 
     model_config = {"env_prefix": "CODEGRAPH_", "env_file": ".env"}
 

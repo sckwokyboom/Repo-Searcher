@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Awaitable, Callable
 
+from rank_bm25 import BM25Okapi
+
 from app.config import settings
 from app.indexer.bm25_builder import build_bm25_index
 from app.indexer.callgraph_builder import build_call_graph
