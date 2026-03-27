@@ -1,18 +1,16 @@
----
-title: Repo Searcher
-emoji: 📈
-colorFrom: red
-colorTo: gray
-sdk: docker
-pinned: false
-license: mit
----
-
 # Repo Searcher
+
+## Как можно протестировать?
+1. Перейти на https://aaxelis-repo-searcher.hf.space/
+2. Выбрать один из проиндексированных репозиториев (под поисковой строкой перечислены)
+3. На открывшейся странице ввести любой вопрос
+4. Под поисковой строкой появятся найденные методы
+
 
 ## Training
 
 Training code is located at `benchmark/lora_training/query_rewriter/train.py`
+and here: `benchmark/lora_training/train_scorer.py` for LLM-MCTS-scorer.
 
 ## Testing
 
