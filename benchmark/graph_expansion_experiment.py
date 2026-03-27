@@ -1,5 +1,3 @@
-"""Graph Expansion Experiment: compare baseline vs 1-hop graph expansion on 75 samples."""
-
 import json
 import random
 import sys
@@ -55,7 +53,9 @@ def _indexed_repos(dataset: BenchmarkDataset) -> dict[str, list[BenchmarkSample]
 
 
 def sample_queries(
-    dataset: BenchmarkDataset, n: int = N_SAMPLES, seed: int = SEED,
+    dataset: BenchmarkDataset,
+    n: int = N_SAMPLES,
+    seed: int = SEED,
 ) -> list[tuple[str, BenchmarkSample]]:
     """Stratified sampling proportional to repo size, only from indexed repos."""
     rng = random.Random(seed)
@@ -89,7 +89,9 @@ def run_experiment():
     print(f"Total: {dataset.total_samples} samples across {dataset.total_repos} repos")
 
     queries = sample_queries(dataset)
-    print(f"Sampled {len(queries)} queries across {len(set(r for r, _ in queries))} repos")
+    print(
+        f"Sampled {len(queries)} queries across {len(set(r for r, _ in queries))} repos"
+    )
 
     # Run retrievers
     modes = {
@@ -111,7 +113,7 @@ def run_experiment():
         repo_id = repo_id_from_name(repo_name)
 
         if qi % 10 == 0:
-            print(f"  [{qi+1}/{len(queries)}] {repo_name}: {sample.query[:60]}...")
+            print(f"  [{qi + 1}/{len(queries)}] {repo_name}: {sample.query[:60]}...")
 
         # Init retrievers for this repo (share indexes)
         if repo_id not in retriever_cache:
@@ -157,18 +159,24 @@ def run_experiment():
                     scores.append(score)
                     seen.add(chunk.file_path)
 
-            all_results[mode_name].append(RetrievalResult(
-                sample_id=sample.event_id,
-                retriever=mode_name,
-                retrieved_files=retrieved_files,
-                retrieved_methods=[c.method_name for c, _ in results if c.method_name],
-                scores=scores,
-                top_k=TOP_K,
-            ))
+            all_results[mode_name].append(
+                RetrievalResult(
+                    sample_id=sample.event_id,
+                    retriever=mode_name,
+                    retrieved_files=retrieved_files,
+                    retrieved_methods=[
+                        c.method_name for c, _ in results if c.method_name
+                    ],
+                    scores=scores,
+                    top_k=TOP_K,
+                )
+            )
 
             log_entry[f"{mode_name}_files"] = retrieved_files
             log_entry[f"{mode_name}_scores"] = scores
-            log_entry[f"{mode_name}_hit@10"] = bool(gt_files & set(retrieved_files[:10]))
+            log_entry[f"{mode_name}_hit@10"] = bool(
+                gt_files & set(retrieved_files[:10])
+            )
             log_entry[f"{mode_name}_hit@5"] = bool(gt_files & set(retrieved_files[:5]))
 
         # Compute graph expansion details for the log
@@ -178,10 +186,18 @@ def run_experiment():
 
         log_entry["B_new_from_graph"] = sorted(b_files_set - baseline_files_set)
         log_entry["C_new_from_graph"] = sorted(c_files_set - baseline_files_set)
-        log_entry["B_gained_gt"] = sorted((gt_files & b_files_set) - (gt_files & baseline_files_set))
-        log_entry["B_lost_gt"] = sorted((gt_files & baseline_files_set) - (gt_files & b_files_set))
-        log_entry["C_gained_gt"] = sorted((gt_files & c_files_set) - (gt_files & baseline_files_set))
-        log_entry["C_lost_gt"] = sorted((gt_files & baseline_files_set) - (gt_files & c_files_set))
+        log_entry["B_gained_gt"] = sorted(
+            (gt_files & b_files_set) - (gt_files & baseline_files_set)
+        )
+        log_entry["B_lost_gt"] = sorted(
+            (gt_files & baseline_files_set) - (gt_files & b_files_set)
+        )
+        log_entry["C_gained_gt"] = sorted(
+            (gt_files & c_files_set) - (gt_files & baseline_files_set)
+        )
+        log_entry["C_lost_gt"] = sorted(
+            (gt_files & baseline_files_set) - (gt_files & c_files_set)
+        )
 
         # Graph stats
         try:
@@ -236,13 +252,16 @@ def run_experiment():
     # Detailed per-k table
     print(f"\n{'Mode':<25}", end="")
     for k in K_VALUES:
-        print(f" {'Hit@'+str(k):>8} {'Rec@'+str(k):>8}", end="")
+        print(f" {'Hit@' + str(k):>8} {'Rec@' + str(k):>8}", end="")
     print(f" {'MRR':>8}")
     print("-" * (25 + len(K_VALUES) * 18 + 8))
     for agg in aggregated:
         print(f"{agg.retriever:<25}", end="")
         for k in K_VALUES:
-            print(f" {agg.hit_at_k.get(k, 0):>8.4f} {agg.recall_at_k.get(k, 0):>8.4f}", end="")
+            print(
+                f" {agg.hit_at_k.get(k, 0):>8.4f} {agg.recall_at_k.get(k, 0):>8.4f}",
+                end="",
+            )
         print(f" {agg.mrr:>8.4f}")
 
     # Select showcase cases
@@ -250,10 +269,17 @@ def run_experiment():
     helped_c = [l for l in detailed_logs if l["C_gained_gt"]]
     hurt_b = [l for l in detailed_logs if l["B_lost_gt"]]
     hurt_c = [l for l in detailed_logs if l["C_lost_gt"]]
-    no_change = [l for l in detailed_logs
-                 if not l["B_gained_gt"] and not l["B_lost_gt"]
-                 and not l["C_gained_gt"] and not l["C_lost_gt"]]
-    large_expand = sorted(detailed_logs, key=lambda l: len(l.get("B_new_from_graph", [])), reverse=True)
+    no_change = [
+        l
+        for l in detailed_logs
+        if not l["B_gained_gt"]
+        and not l["B_lost_gt"]
+        and not l["C_gained_gt"]
+        and not l["C_lost_gt"]
+    ]
+    large_expand = sorted(
+        detailed_logs, key=lambda l: len(l.get("B_new_from_graph", [])), reverse=True
+    )
 
     showcase = []
     for l in helped_b[:4]:
@@ -366,7 +392,9 @@ def run_experiment():
             report_lines.append(f"**B gained GT**: {', '.join(sc['B_gained_gt'])}")
         if sc.get("B_lost_gt"):
             report_lines.append(f"**B lost GT**: {', '.join(sc['B_lost_gt'])}")
-        report_lines.append(f"**New files from graph (B)**: {len(sc.get('B_new_from_graph', []))}")
+        report_lines.append(
+            f"**New files from graph (B)**: {len(sc.get('B_new_from_graph', []))}"
+        )
         report_lines.append("")
 
     # Conclusion
@@ -376,20 +404,32 @@ def run_experiment():
         c_agg = next((a for a in aggregated if "prior_expand" in a.retriever), None)
         best_delta_h10 = 0
         if b_agg:
-            best_delta_h10 = max(best_delta_h10, b_agg.hit_at_k.get(10, 0) - baseline_agg.hit_at_k.get(10, 0))
+            best_delta_h10 = max(
+                best_delta_h10,
+                b_agg.hit_at_k.get(10, 0) - baseline_agg.hit_at_k.get(10, 0),
+            )
         if c_agg:
-            best_delta_h10 = max(best_delta_h10, c_agg.hit_at_k.get(10, 0) - baseline_agg.hit_at_k.get(10, 0))
+            best_delta_h10 = max(
+                best_delta_h10,
+                c_agg.hit_at_k.get(10, 0) - baseline_agg.hit_at_k.get(10, 0),
+            )
 
         if best_delta_h10 >= 0.03:
-            report_lines.append("**Decision: CONTINUE** - local graph expansion gives measurable signal "
-                                f"(best dHit@10 = {best_delta_h10:+.4f}). Worth building stage-2 graph retrieval.")
+            report_lines.append(
+                "**Decision: CONTINUE** - local graph expansion gives measurable signal "
+                f"(best dHit@10 = {best_delta_h10:+.4f}). Worth building stage-2 graph retrieval."
+            )
         elif best_delta_h10 > 0 or len(helped_b) > 5:
-            report_lines.append("**Decision: LIMITED CONTINUE** - graph expansion helps on a subset of queries "
-                                f"(helped {len(helped_b)} queries, best dHit@10 = {best_delta_h10:+.4f}). "
-                                "May be worth conditional application.")
+            report_lines.append(
+                "**Decision: LIMITED CONTINUE** - graph expansion helps on a subset of queries "
+                f"(helped {len(helped_b)} queries, best dHit@10 = {best_delta_h10:+.4f}). "
+                "May be worth conditional application."
+            )
         else:
-            report_lines.append("**Decision: STOP** - graph expansion does not provide measurable improvement "
-                                f"on this benchmark (best dHit@10 = {best_delta_h10:+.4f}).")
+            report_lines.append(
+                "**Decision: STOP** - graph expansion does not provide measurable improvement "
+                f"on this benchmark (best dHit@10 = {best_delta_h10:+.4f})."
+            )
 
     report_text = "\n".join(report_lines)
     with open(EXPERIMENT_DIR / "EXPERIMENT_REPORT.md", "w") as f:

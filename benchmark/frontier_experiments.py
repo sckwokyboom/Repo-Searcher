@@ -1,16 +1,3 @@
-"""Graph Frontier Experiments E0–E5: validate LLM+LoRA viability as frontier reranker.
-
-Experiments:
-  E0 — Oracle coverage for expanded pool
-  E1 — Safe Graph Expansion V2 (freeze top-5, prior-ranked neighbors)
-  E2 — Edge direction ablation (outgoing / incoming / both)
-  E3 — Frontier quality diagnostics (candidate dataset stats)
-  E4 — LLM probe (Qwen2.5-Coder logit-based YES/NO)
-  E5 — Smoke LoRA (optional, only if E0–E4 pass)
-
-Each experiment gates the next. Run: python benchmark/frontier_experiments.py
-"""
-
 import json
 import random
 import sys
@@ -36,8 +23,8 @@ from benchmark.retrievers import (
     _build_chunk_id_index,
     _get_call_graph,
 )
-from app.config import settings
-from app.indexer.store import load_chunks
+from backend.app.config import settings
+from backend.app.indexer.store import load_chunks
 
 EXPERIMENT_DIR = Path(__file__).parent / "results" / "graph_frontier_v2"
 N_SAMPLES = 75
@@ -45,10 +32,6 @@ SEED = 42
 TOP_K = 10
 K_VALUES = [1, 3, 5, 10]
 
-
-# ---------------------------------------------------------------------------
-# Shared infrastructure
-# ---------------------------------------------------------------------------
 
 def load_dataset() -> BenchmarkDataset:
     with open(SAMPLES_PATH) as f:
@@ -68,7 +51,9 @@ def _indexed_repos(dataset: BenchmarkDataset) -> dict[str, list[BenchmarkSample]
 
 
 def sample_queries(
-    dataset: BenchmarkDataset, n: int = N_SAMPLES, seed: int = SEED,
+    dataset: BenchmarkDataset,
+    n: int = N_SAMPLES,
+    seed: int = SEED,
 ) -> list[tuple[str, BenchmarkSample]]:
     rng = random.Random(seed)
     indexed = _indexed_repos(dataset)
@@ -117,10 +102,6 @@ def save_json(data, filename: str):
     print(f"  Saved {path}")
 
 
-# ---------------------------------------------------------------------------
-# E0 — Oracle coverage for frontier
-# ---------------------------------------------------------------------------
-
 def run_e0_oracle_coverage(
     queries: list[tuple[str, BenchmarkSample]],
     cache: dict,
@@ -137,13 +118,10 @@ def run_e0_oracle_coverage(
         repo_id = repo_id_from_name(repo_name)
         gt_files = set(sample.changed_files)
 
-        # Baseline top-20
         baseline_ret = make_retriever(BM25FileAgg, repo_id, cache)
         baseline_results = baseline_ret.retrieve(sample.query, top_k=20)
         baseline_files = [c.file_path for c, _ in baseline_results]
         baseline_top10 = set(baseline_files[:10])
-
-        # Graph neighbors of top-5 seeds (raw, no prior filtering)
         cached_data = get_cached(repo_id, cache)
         chunks = cached_data["_chunks"]
         file_chunk_idx = _build_file_chunk_index(chunks)
@@ -167,7 +145,9 @@ def run_e0_oracle_coverage(
                         continue
                     if graph.degree(chunk_id) > 50:
                         continue
-                    for nid in list(graph.predecessors(chunk_id)) + list(graph.successors(chunk_id)):
+                    for nid in list(graph.predecessors(chunk_id)) + list(
+                        graph.successors(chunk_id)
+                    ):
                         if count >= 10:
                             break
                         ni = chunk_id_idx.get(nid)
@@ -189,15 +169,17 @@ def run_e0_oracle_coverage(
         coverage_baseline_10 += has_baseline
         coverage_pool_20 += has_pool
 
-        per_query.append({
-            "sample_id": sample.event_id,
-            "repo": repo_name,
-            "coverage_baseline_10": has_baseline,
-            "coverage_pool_20": has_pool,
-            "pool_size": len(pool_set),
-            "graph_neighbors_added": len(pool_set - baseline_top10),
-            "gt_in_pool_not_baseline": sorted(gt_files & pool_set - baseline_top10),
-        })
+        per_query.append(
+            {
+                "sample_id": sample.event_id,
+                "repo": repo_name,
+                "coverage_baseline_10": has_baseline,
+                "coverage_pool_20": has_pool,
+                "pool_size": len(pool_set),
+                "graph_neighbors_added": len(pool_set - baseline_top10),
+                "gt_in_pool_not_baseline": sorted(gt_files & pool_set - baseline_top10),
+            }
+        )
 
     n = len(queries)
     mean_baseline = coverage_baseline_10 / n
@@ -222,10 +204,6 @@ def run_e0_oracle_coverage(
     return result
 
 
-# ---------------------------------------------------------------------------
-# E1 — Safe Graph Expansion V2
-# ---------------------------------------------------------------------------
-
 def run_e1_safe_expansion(
     queries: list[tuple[str, BenchmarkSample]],
     cache: dict,
@@ -244,9 +222,8 @@ def run_e1_safe_expansion(
         gt_files = set(sample.changed_files)
 
         if qi % 10 == 0:
-            print(f"  [{qi+1}/{len(queries)}] {repo_name}: {sample.query[:60]}...")
+            print(f"  [{qi + 1}/{len(queries)}] {repo_name}: {sample.query[:60]}...")
 
-        # Baseline
         baseline_ret = make_retriever(BM25FileAgg, repo_id, cache)
         try:
             bl_results = baseline_ret.retrieve(sample.query, top_k=TOP_K)
@@ -263,8 +240,9 @@ def run_e1_safe_expansion(
                 bl_scores.append(score)
                 seen.add(chunk.file_path)
 
-        # Safe Graph V2
-        v2_ret = make_retriever(SafeGraphExpansionV2, repo_id, cache, edge_direction="both")
+        v2_ret = make_retriever(
+            SafeGraphExpansionV2, repo_id, cache, edge_direction="both"
+        )
         try:
             v2_raw, diag = v2_ret.retrieve_with_diagnostics(sample.query, top_k=TOP_K)
         except Exception as e:
@@ -283,32 +261,51 @@ def run_e1_safe_expansion(
 
         samples_list.append(sample)
 
-        baseline_results_list.append(RetrievalResult(
-            sample_id=sample.event_id, retriever="A_baseline",
-            retrieved_files=bl_files, retrieved_methods=[], scores=bl_scores, top_k=TOP_K,
-        ))
-        v2_results_list.append(RetrievalResult(
-            sample_id=sample.event_id, retriever="D_safe_graph_v2",
-            retrieved_files=v2_files, retrieved_methods=[], scores=v2_scores, top_k=TOP_K,
-        ))
+        baseline_results_list.append(
+            RetrievalResult(
+                sample_id=sample.event_id,
+                retriever="A_baseline",
+                retrieved_files=bl_files,
+                retrieved_methods=[],
+                scores=bl_scores,
+                top_k=TOP_K,
+            )
+        )
+        v2_results_list.append(
+            RetrievalResult(
+                sample_id=sample.event_id,
+                retriever="D_safe_graph_v2",
+                retrieved_files=v2_files,
+                retrieved_methods=[],
+                scores=v2_scores,
+                top_k=TOP_K,
+            )
+        )
 
-        per_query_logs.append({
-            "sample_id": sample.event_id,
-            "repo": repo_name,
-            "query": sample.query,
-            "gt_files": sample.changed_files,
-            "baseline_files": bl_files,
-            "v2_files": v2_files,
-            "v2_new_from_graph": sorted(set(v2_files) - set(bl_files)),
-            "v2_gained_gt": sorted((gt_files & set(v2_files)) - (gt_files & set(bl_files))),
-            "v2_lost_gt": sorted((gt_files & set(bl_files)) - (gt_files & set(v2_files))),
-            "diagnostics": diag,
-        })
+        per_query_logs.append(
+            {
+                "sample_id": sample.event_id,
+                "repo": repo_name,
+                "query": sample.query,
+                "gt_files": sample.changed_files,
+                "baseline_files": bl_files,
+                "v2_files": v2_files,
+                "v2_new_from_graph": sorted(set(v2_files) - set(bl_files)),
+                "v2_gained_gt": sorted(
+                    (gt_files & set(v2_files)) - (gt_files & set(bl_files))
+                ),
+                "v2_lost_gt": sorted(
+                    (gt_files & set(bl_files)) - (gt_files & set(v2_files))
+                ),
+                "diagnostics": diag,
+            }
+        )
 
-    # Evaluate
     bl_metrics = []
     v2_metrics = []
-    for sample, bl_res, v2_res in zip(samples_list, baseline_results_list, v2_results_list):
+    for sample, bl_res, v2_res in zip(
+        samples_list, baseline_results_list, v2_results_list
+    ):
         bl_metrics.append(compute_sample_metrics(sample, bl_res, K_VALUES))
         v2_metrics.append(compute_sample_metrics(sample, v2_res, K_VALUES))
 
@@ -320,7 +317,6 @@ def run_e1_safe_expansion(
     d_mrr = v2_agg.mrr - bl_agg.mrr
     d_recall10 = v2_agg.recall_at_k.get(10, 0) - bl_agg.recall_at_k.get(10, 0)
 
-    # GO: Hit@10 >= baseline+2pp or MRR >= baseline+1pp, without Hit@5 drop > 1pp
     hit5_ok = d_hit5 >= -0.01
     improvement = d_hit10 >= 0.02 or d_mrr >= 0.01
     go = hit5_ok and improvement
@@ -354,19 +350,19 @@ def run_e1_safe_expansion(
     }
 
     print(f"\n  {'Mode':<20} {'Hit@5':>8} {'Hit@10':>8} {'MRR':>8} {'Recall@10':>10}")
-    print(f"  {'-'*56}")
-    print(f"  {'Baseline':<20} {bl_agg.hit_at_k.get(5,0):>8.4f} {bl_agg.hit_at_k.get(10,0):>8.4f} {bl_agg.mrr:>8.4f} {bl_agg.recall_at_k.get(10,0):>10.4f}")
-    print(f"  {'SafeGraphV2':<20} {v2_agg.hit_at_k.get(5,0):>8.4f} {v2_agg.hit_at_k.get(10,0):>8.4f} {v2_agg.mrr:>8.4f} {v2_agg.recall_at_k.get(10,0):>10.4f}")
+    print(f"  {'-' * 56}")
+    print(
+        f"  {'Baseline':<20} {bl_agg.hit_at_k.get(5, 0):>8.4f} {bl_agg.hit_at_k.get(10, 0):>8.4f} {bl_agg.mrr:>8.4f} {bl_agg.recall_at_k.get(10, 0):>10.4f}"
+    )
+    print(
+        f"  {'SafeGraphV2':<20} {v2_agg.hit_at_k.get(5, 0):>8.4f} {v2_agg.hit_at_k.get(10, 0):>8.4f} {v2_agg.mrr:>8.4f} {v2_agg.recall_at_k.get(10, 0):>10.4f}"
+    )
     print(f"  Delta:   dHit@5={d_hit5:+.4f}  dHit@10={d_hit10:+.4f}  dMRR={d_mrr:+.4f}")
     print(f"  Helped: {helped}, Hurt: {hurt}")
     print(f"  GO: {go}")
 
     return result
 
-
-# ---------------------------------------------------------------------------
-# E2 — Edge direction ablation
-# ---------------------------------------------------------------------------
 
 def run_e2_edge_direction(
     queries: list[tuple[str, BenchmarkSample]],
@@ -386,7 +382,9 @@ def run_e2_edge_direction(
 
         for qi, (repo_name, sample) in enumerate(queries):
             repo_id = repo_id_from_name(repo_name)
-            ret = make_retriever(SafeGraphExpansionV2, repo_id, cache, edge_direction=direction)
+            ret = make_retriever(
+                SafeGraphExpansionV2, repo_id, cache, edge_direction=direction
+            )
             try:
                 raw_results = ret.retrieve(sample.query, top_k=TOP_K)
             except Exception as e:
@@ -403,8 +401,12 @@ def run_e2_edge_direction(
                     seen.add(chunk.file_path)
 
             rr = RetrievalResult(
-                sample_id=sample.event_id, retriever=f"V2_{direction}",
-                retrieved_files=files, retrieved_methods=[], scores=scores, top_k=TOP_K,
+                sample_id=sample.event_id,
+                retriever=f"V2_{direction}",
+                retrieved_files=files,
+                retrieved_methods=[],
+                scores=scores,
+                top_k=TOP_K,
             )
             metrics_list.append(compute_sample_metrics(sample, rr, K_VALUES))
             samples_list.append(sample)
@@ -416,9 +418,8 @@ def run_e2_edge_direction(
             "mrr": round(agg.mrr, 4),
             "recall10": round(agg.recall_at_k.get(10, 0), 4),
         }
-        print(f"  Hit@10={agg.hit_at_k.get(10,0):.4f}  MRR={agg.mrr:.4f}")
+        print(f"  Hit@10={agg.hit_at_k.get(10, 0):.4f}  MRR={agg.mrr:.4f}")
 
-    # Select best by Hit@10, break ties by MRR
     best_dir = max(
         directions,
         key=lambda d: (results_by_dir[d]["hit10"], results_by_dir[d]["mrr"]),
@@ -432,10 +433,6 @@ def run_e2_edge_direction(
     print(f"\n  Best direction: {best_dir}")
     return result
 
-
-# ---------------------------------------------------------------------------
-# E3 — Frontier quality diagnostics
-# ---------------------------------------------------------------------------
 
 def run_e3_diagnostics(
     queries: list[tuple[str, BenchmarkSample]],
@@ -452,7 +449,6 @@ def run_e3_diagnostics(
         repo_id = repo_id_from_name(repo_name)
         gt_files = set(sample.changed_files)
 
-        # Baseline for reference
         baseline_ret = make_retriever(BM25FileAgg, repo_id, cache)
         try:
             bl_results = baseline_ret.retrieve(sample.query, top_k=20)
@@ -462,32 +458,33 @@ def run_e3_diagnostics(
         bl_top10 = set(bl_files[:10])
         bl_rank_map = {fp: i + 1 for i, fp in enumerate(bl_files)}
 
-        # V2 with diagnostics
-        v2_ret = make_retriever(SafeGraphExpansionV2, repo_id, cache, edge_direction=best_direction)
+        v2_ret = make_retriever(
+            SafeGraphExpansionV2, repo_id, cache, edge_direction=best_direction
+        )
         try:
             _, diag = v2_ret.retrieve_with_diagnostics(sample.query, top_k=TOP_K)
         except Exception:
             continue
 
-        # Collect candidates from filtered neighbors
         for nb in diag.get("filtered_neighbors", []):
             cand_fp = nb["candidate"]
-            all_candidates.append({
-                "query": sample.query,
-                "sample_id": sample.event_id,
-                "repo": repo_name,
-                "seed_file": nb["seed"],
-                "candidate_file": cand_fp,
-                "edge_direction": nb["direction"],
-                "edge_type": "method_invocation",
-                "is_gt": 1 if cand_fp in gt_files else 0,
-                "baseline_rank": bl_rank_map.get(cand_fp, -1),
-                "graph_only": 1 if cand_fp not in set(bl_files[:20]) else 0,
-                "prior_score": round(nb["prior"], 4),
-                "gt_in_baseline_top10": 1 if cand_fp in bl_top10 else 0,
-            })
+            all_candidates.append(
+                {
+                    "query": sample.query,
+                    "sample_id": sample.event_id,
+                    "repo": repo_name,
+                    "seed_file": nb["seed"],
+                    "candidate_file": cand_fp,
+                    "edge_direction": nb["direction"],
+                    "edge_type": "method_invocation",
+                    "is_gt": 1 if cand_fp in gt_files else 0,
+                    "baseline_rank": bl_rank_map.get(cand_fp, -1),
+                    "graph_only": 1 if cand_fp not in set(bl_files[:20]) else 0,
+                    "prior_score": round(nb["prior"], 4),
+                    "gt_in_baseline_top10": 1 if cand_fp in bl_top10 else 0,
+                }
+            )
 
-    # Statistics
     n_candidates = len(all_candidates)
     n_positive = sum(c["is_gt"] for c in all_candidates)
     n_graph_only = sum(c["graph_only"] for c in all_candidates)
@@ -496,7 +493,6 @@ def run_e3_diagnostics(
     positive_rate = n_positive / max(1, n_candidates)
     graph_only_positive_rate = n_graph_only_positive / max(1, n_graph_only)
 
-    # Queries with GT in pool but not baseline top-10
     query_gt_expansion = set()
     query_ids = set()
     for c in all_candidates:
@@ -508,11 +504,7 @@ def run_e3_diagnostics(
     queries_with_expansion_gt = len(query_gt_expansion)
     expansion_gt_rate = queries_with_expansion_gt / max(1, n_queries)
 
-    go = (
-        expansion_gt_rate >= 0.10
-        and positive_rate >= 0.10
-        and n_candidates >= 100
-    )
+    go = expansion_gt_rate >= 0.10 and positive_rate >= 0.10 and n_candidates >= 100
 
     result = {
         "total_candidates": n_candidates,
@@ -531,11 +523,14 @@ def run_e3_diagnostics(
     print(f"  Total candidates:           {n_candidates}")
     print(f"  Positives:                  {n_positive} ({positive_rate:.2%})")
     print(f"  Graph-only candidates:      {n_graph_only}")
-    print(f"  Graph-only positives:       {n_graph_only_positive} ({graph_only_positive_rate:.2%})")
-    print(f"  Queries with GT expansion:  {queries_with_expansion_gt} / {n_queries} ({expansion_gt_rate:.2%})")
+    print(
+        f"  Graph-only positives:       {n_graph_only_positive} ({graph_only_positive_rate:.2%})"
+    )
+    print(
+        f"  Queries with GT expansion:  {queries_with_expansion_gt} / {n_queries} ({expansion_gt_rate:.2%})"
+    )
     print(f"  GO: {go}")
 
-    # Save frontier dataset JSONL
     jsonl_path = EXPERIMENT_DIR / "frontier_dataset.jsonl"
     with open(jsonl_path, "w") as f:
         for c in all_candidates:
@@ -544,10 +539,6 @@ def run_e3_diagnostics(
 
     return result
 
-
-# ---------------------------------------------------------------------------
-# E4 — LLM probe (logit-based YES/NO)
-# ---------------------------------------------------------------------------
 
 def run_e4_llm_probe(
     queries: list[tuple[str, BenchmarkSample]],
@@ -561,7 +552,6 @@ def run_e4_llm_probe(
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    # Select probe queries: those where expansion changed pool + has ≥1 positive
     query_candidates = defaultdict(list)
     for c in candidates:
         query_candidates[c["sample_id"]].append(c)
@@ -572,14 +562,12 @@ def run_e4_llm_probe(
         has_graph_only = any(c["graph_only"] for c in cands)
         if has_positive and has_graph_only:
             probe_queries.append(sid)
-    # Fallback: if too few with both, relax to just has_positive
     if len(probe_queries) < 10:
         for sid, cands in query_candidates.items():
             if sid not in probe_queries and any(c["is_gt"] for c in cands):
                 probe_queries.append(sid)
             if len(probe_queries) >= 20:
                 break
-    # Further fallback: take any queries with candidates
     if len(probe_queries) < 10:
         for sid in query_candidates:
             if sid not in probe_queries:
@@ -590,7 +578,6 @@ def run_e4_llm_probe(
     probe_queries = probe_queries[:20]
     print(f"  Selected {len(probe_queries)} probe queries")
 
-    # Collect (query, candidate) pairs
     probe_pairs = []
     for sid in probe_queries:
         for c in query_candidates[sid]:
@@ -600,22 +587,25 @@ def run_e4_llm_probe(
     if not probe_pairs:
         return {"go": False, "reason": "no probe pairs", "n_pairs": 0}
 
-    # Load model
     MODEL_NAME = "Qwen/Qwen2.5-Coder-1.5B"
     print(f"  Loading {MODEL_NAME}...")
-    device = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
+    device = (
+        "mps"
+        if torch.backends.mps.is_available()
+        else ("cuda" if torch.cuda.is_available() else "cpu")
+    )
 
     try:
         tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
         model = AutoModelForCausalLM.from_pretrained(
-            MODEL_NAME, torch_dtype=torch.float16, trust_remote_code=True,
+            MODEL_NAME,
+            torch_dtype=torch.float16,
+            trust_remote_code=True,
         ).to(device)
         model.eval()
     except Exception as e:
         print(f"  ERROR loading model: {e}")
         return {"go": False, "reason": f"model load failed: {e}", "n_pairs": 0}
-
-    # Get token IDs for Yes/No
     yes_ids = set()
     no_ids = set()
     for text in ["Yes", " Yes", "yes", " yes"]:
@@ -629,7 +619,6 @@ def run_e4_llm_probe(
 
     print(f"  Yes token IDs: {yes_ids}, No token IDs: {no_ids}")
 
-    # Build chunk cache for seed/candidate info
     chunk_cache: dict[str, dict] = {}  # repo_id -> {fp -> chunk_info}
     for pair in probe_pairs:
         repo_name = pair["repo"]
@@ -648,18 +637,16 @@ def run_e4_llm_probe(
                     by_fp[chunk.file_path]["classes"].add(chunk.class_name)
                 if chunk.method_name:
                     by_fp[chunk.file_path]["methods"].add(chunk.method_name)
-            # Convert sets to sorted lists
             for fp in by_fp:
                 by_fp[fp]["classes"] = sorted(by_fp[fp]["classes"])
                 by_fp[fp]["methods"] = sorted(by_fp[fp]["methods"])
             chunk_cache[repo_id] = by_fp
 
-    # Run probe
     probe_results = []
     print(f"  Running probe on {len(probe_pairs)} pairs...")
     for pi, pair in enumerate(probe_pairs):
         if pi % 20 == 0:
-            print(f"    [{pi+1}/{len(probe_pairs)}]...")
+            print(f"    [{pi + 1}/{len(probe_pairs)}]...")
 
         repo_id = repo_id_from_name(pair["repo"])
         by_fp = chunk_cache.get(repo_id, {})
@@ -681,16 +668,20 @@ def run_e4_llm_probe(
         )
 
         try:
-            inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512).to(device)
+            inputs = tokenizer(
+                prompt, return_tensors="pt", truncation=True, max_length=512
+            ).to(device)
             with torch.no_grad():
                 outputs = model(**inputs)
-            logits = outputs.logits[0, -1, :]  # last token logits
+            logits = outputs.logits[0, -1, :]
 
-            # Get max logit for Yes/No token variants
-            yes_logit = max(logits[tid].item() for tid in yes_ids) if yes_ids else -float("inf")
-            no_logit = max(logits[tid].item() for tid in no_ids) if no_ids else -float("inf")
+            yes_logit = (
+                max(logits[tid].item() for tid in yes_ids) if yes_ids else -float("inf")
+            )
+            no_logit = (
+                max(logits[tid].item() for tid in no_ids) if no_ids else -float("inf")
+            )
 
-            # Softmax over just Yes/No
             max_logit = max(yes_logit, no_logit)
             yes_exp = torch.exp(torch.tensor(yes_logit - max_logit)).item()
             no_exp = torch.exp(torch.tensor(no_logit - max_logit)).item()
@@ -700,15 +691,16 @@ def run_e4_llm_probe(
             print(f"    ERROR at pair {pi}: {e}")
             p_yes = 0.5
 
-        probe_results.append({
-            "sample_id": pair["sample_id"],
-            "candidate_file": pair["candidate_file"],
-            "is_gt": pair["is_gt"],
-            "p_yes": round(p_yes, 4),
-            "graph_only": pair["graph_only"],
-        })
+        probe_results.append(
+            {
+                "sample_id": pair["sample_id"],
+                "candidate_file": pair["candidate_file"],
+                "is_gt": pair["is_gt"],
+                "p_yes": round(p_yes, 4),
+                "graph_only": pair["graph_only"],
+            }
+        )
 
-    # Compute metrics
     positives = [r for r in probe_results if r["is_gt"]]
     negatives = [r for r in probe_results if not r["is_gt"]]
 
@@ -716,7 +708,6 @@ def run_e4_llm_probe(
     avg_neg = sum(r["p_yes"] for r in negatives) / max(1, len(negatives))
     score_gap = avg_pos - avg_neg
 
-    # Pairwise accuracy: for each query, compare all (pos, neg) pairs
     pairwise_correct = 0
     pairwise_total = 0
     by_query = defaultdict(lambda: {"pos": [], "neg": []})
@@ -737,10 +728,10 @@ def run_e4_llm_probe(
 
     pairwise_accuracy = pairwise_correct / max(1, pairwise_total)
 
-    # AUC
     auc = 0.5
     try:
         from sklearn.metrics import roc_auc_score
+
         labels = [r["is_gt"] for r in probe_results]
         scores = [r["p_yes"] for r in probe_results]
         if len(set(labels)) > 1:
@@ -772,11 +763,12 @@ def run_e4_llm_probe(
     print(f"  Avg p(Yes) pos: {avg_pos:.4f}")
     print(f"  Avg p(Yes) neg: {avg_neg:.4f}")
     print(f"  Score gap:      {score_gap:+.4f}")
-    print(f"  Pairwise acc:   {pairwise_accuracy:.4f} ({pairwise_correct}/{pairwise_total})")
+    print(
+        f"  Pairwise acc:   {pairwise_accuracy:.4f} ({pairwise_correct}/{pairwise_total})"
+    )
     print(f"  AUC:            {auc:.4f}")
     print(f"  GO: {go}")
 
-    # Cleanup model
     del model
     del tokenizer
     if torch.backends.mps.is_available():
@@ -786,10 +778,6 @@ def run_e4_llm_probe(
 
     return result
 
-
-# ---------------------------------------------------------------------------
-# E5 — Smoke LoRA (optional)
-# ---------------------------------------------------------------------------
 
 def run_e5_smoke_lora(
     candidates: list[dict],
@@ -805,7 +793,6 @@ def run_e5_smoke_lora(
     from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
     from trl import SFTTrainer
 
-    # Build training data from candidates
     train_samples = []
     for c in candidates:
         label = "Yes" if c["is_gt"] else "No"
@@ -822,7 +809,6 @@ def run_e5_smoke_lora(
     if len(train_samples) < 50:
         return {"success": False, "reason": f"too few samples ({len(train_samples)})"}
 
-    # Split 80/20
     random.seed(SEED)
     random.shuffle(train_samples)
     split_idx = int(len(train_samples) * 0.8)
@@ -831,7 +817,6 @@ def run_e5_smoke_lora(
 
     print(f"  Train: {len(train_data)}, Val: {len(val_data)}")
 
-    # Check class balance
     train_pos = sum(s["is_gt"] for s in train_data)
     val_pos = sum(s["is_gt"] for s in val_data)
     print(f"  Train positives: {train_pos}/{len(train_data)}")
@@ -843,9 +828,12 @@ def run_e5_smoke_lora(
     train_ds = Dataset.from_list([{"text": s["text"]} for s in train_data])
     val_ds = Dataset.from_list([{"text": s["text"]} for s in val_data])
 
-    # Load model + LoRA
     MODEL_NAME = "Qwen/Qwen2.5-Coder-1.5B"
-    device = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
+    device = (
+        "mps"
+        if torch.backends.mps.is_available()
+        else ("cuda" if torch.cuda.is_available() else "cpu")
+    )
 
     print(f"  Loading {MODEL_NAME} for LoRA training...")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
@@ -853,7 +841,9 @@ def run_e5_smoke_lora(
         tokenizer.pad_token = tokenizer.eos_token
 
     model = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME, torch_dtype=torch.float16, trust_remote_code=True,
+        MODEL_NAME,
+        torch_dtype=torch.float16,
+        trust_remote_code=True,
     ).to(device)
 
     lora_config = LoraConfig(
@@ -861,8 +851,15 @@ def run_e5_smoke_lora(
         r=8,
         lora_alpha=16,
         lora_dropout=0.05,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
-                        "gate_proj", "up_proj", "down_proj"],
+        target_modules=[
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
+        ],
     )
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
@@ -906,18 +903,15 @@ def run_e5_smoke_lora(
     print("  Training...")
     trainer.train()
 
-    # Save adapter
     final_path = output_dir / "final"
     model.save_pretrained(str(final_path))
     tokenizer.save_pretrained(str(final_path))
     print(f"  Adapter saved to {final_path}")
 
-    # Evaluate: check if LoRA improved over frozen baseline
     eval_metrics = trainer.evaluate()
     eval_loss = eval_metrics.get("eval_loss", float("inf"))
     print(f"  Eval loss: {eval_loss:.4f}")
 
-    # Quick logit probe on val set (same as E4 approach)
     model.eval()
     yes_ids = set()
     no_ids = set()
@@ -932,15 +926,20 @@ def run_e5_smoke_lora(
 
     val_preds = []
     for s in val_data:
-        # Strip the answer for probe
         prompt = s["text"].rsplit("Answer:", 1)[0] + "Answer:"
         try:
-            inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512).to(device)
+            inputs = tokenizer(
+                prompt, return_tensors="pt", truncation=True, max_length=512
+            ).to(device)
             with torch.no_grad():
                 outputs = model(**inputs)
             logits = outputs.logits[0, -1, :]
-            yes_logit = max(logits[tid].item() for tid in yes_ids) if yes_ids else -float("inf")
-            no_logit = max(logits[tid].item() for tid in no_ids) if no_ids else -float("inf")
+            yes_logit = (
+                max(logits[tid].item() for tid in yes_ids) if yes_ids else -float("inf")
+            )
+            no_logit = (
+                max(logits[tid].item() for tid in no_ids) if no_ids else -float("inf")
+            )
             max_l = max(yes_logit, no_logit)
             yes_exp = torch.exp(torch.tensor(yes_logit - max_l)).item()
             no_exp = torch.exp(torch.tensor(no_logit - max_l)).item()
@@ -949,7 +948,6 @@ def run_e5_smoke_lora(
             p_yes = 0.5
         val_preds.append({"is_gt": s["is_gt"], "p_yes": round(p_yes, 4)})
 
-    # Compute LoRA pairwise accuracy on val
     by_pred = {"pos": [], "neg": []}
     for p in val_preds:
         if p["is_gt"]:
@@ -968,11 +966,9 @@ def run_e5_smoke_lora(
                 pw_correct += 0.5
     lora_pw = pw_correct / max(1, pw_total)
 
-    # Check for class collapse
     all_preds = [p["p_yes"] > 0.5 for p in val_preds]
     class_collapse = len(set(all_preds)) <= 1
 
-    # Compare with E4 frozen baseline
     frozen_pw = e4_results.get("pairwise_accuracy", 0.5)
     improved = lora_pw > frozen_pw
 
@@ -995,17 +991,12 @@ def run_e5_smoke_lora(
     print(f"  Class collapse:      {class_collapse}")
     print(f"  Success: {success}")
 
-    # Cleanup
     del model, trainer
     if torch.backends.mps.is_available():
         torch.mps.empty_cache()
 
     return result
 
-
-# ---------------------------------------------------------------------------
-# Summary
-# ---------------------------------------------------------------------------
 
 def write_summary(decisions: dict, verdict: str):
     lines = [
@@ -1044,10 +1035,6 @@ def write_summary(decisions: dict, verdict: str):
     print(f"\nSummary written to {path}")
 
 
-# ---------------------------------------------------------------------------
-# Orchestrator
-# ---------------------------------------------------------------------------
-
 def run_all():
     EXPERIMENT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -1059,29 +1046,35 @@ def run_all():
     print(f"Total: {dataset.total_samples} samples across {dataset.total_repos} repos")
 
     queries = sample_queries(dataset)
-    print(f"Sampled {len(queries)} queries across {len(set(r for r, _ in queries))} repos")
+    print(
+        f"Sampled {len(queries)} queries across {len(set(r for r, _ in queries))} repos"
+    )
 
     cache: dict = {}
     decisions: dict = {}
     start = time.time()
 
-    # E0 — Oracle coverage
     e0 = run_e0_oracle_coverage(queries, cache)
     decisions["E0_oracle_coverage"] = e0
-    save_json({k: v for k, v in e0.items() if k != "per_query"}, "e0_oracle_coverage.json")
+    save_json(
+        {k: v for k, v in e0.items() if k != "per_query"}, "e0_oracle_coverage.json"
+    )
     save_json(e0["per_query"], "e0_per_query.json")
 
     if not e0["go"]:
-        verdict = f"NO-GO at E0: expanded pool delta = {e0['delta']:+.4f} (need >= +0.04)"
+        verdict = (
+            f"NO-GO at E0: expanded pool delta = {e0['delta']:+.4f} (need >= +0.04)"
+        )
         write_summary(decisions, verdict)
         print(f"\n{verdict}")
         print(f"Total time: {time.time() - start:.1f}s")
         return
 
-    # E1 — Safe Graph Expansion V2
     e1 = run_e1_safe_expansion(queries, cache)
     decisions["E1_safe_expansion"] = e1
-    save_json({k: v for k, v in e1.items() if k != "per_query"}, "e1_safe_expansion.json")
+    save_json(
+        {k: v for k, v in e1.items() if k != "per_query"}, "e1_safe_expansion.json"
+    )
 
     if not e1["go"]:
         verdict = (
@@ -1093,12 +1086,10 @@ def run_all():
         print(f"Total time: {time.time() - start:.1f}s")
         return
 
-    # E2 — Edge direction ablation
     e2 = run_e2_edge_direction(queries, cache)
     decisions["E2_edge_ablation"] = e2
     save_json(e2, "e2_edge_ablation.json")
 
-    # E3 — Frontier quality diagnostics
     e3 = run_e3_diagnostics(queries, cache, e2["best_direction"])
     decisions["E3_diagnostics"] = {k: v for k, v in e3.items() if k != "candidates"}
     save_json({k: v for k, v in e3.items() if k != "candidates"}, "e3_diagnostics.json")
@@ -1113,7 +1104,6 @@ def run_all():
         print(f"Total time: {time.time() - start:.1f}s")
         return
 
-    # E4 — LLM probe
     e4 = run_e4_llm_probe(queries, cache, e3["candidates"])
     decisions["E4_llm_probe"] = {k: v for k, v in e4.items() if k != "probe_results"}
     save_json(e4, "e4_llm_probe.json")
@@ -1128,7 +1118,6 @@ def run_all():
         print(f"Total time: {time.time() - start:.1f}s")
         return
 
-    # E5 — Smoke LoRA (optional)
     try:
         e5 = run_e5_smoke_lora(e3["candidates"], e4)
         decisions["E5_smoke_lora"] = e5
@@ -1137,20 +1126,21 @@ def run_all():
         print(f"  E5 SKIPPED: {e}")
         decisions["E5_smoke_lora"] = {"success": False, "reason": str(e)}
 
-    # Final verdict
     all_pass = all(
         (d.get("go") or d.get("success")) if isinstance(d, dict) else False
         for d in decisions.values()
     )
     if all_pass:
-        verdict = "GO — All experiments passed. LLM+LoRA as frontier reranker is viable."
+        verdict = (
+            "GO — All experiments passed. LLM+LoRA as frontier reranker is viable."
+        )
     elif e4.get("go"):
         verdict = "GO — E0-E4 passed. Proceed to full LoRA training."
     else:
         verdict = "LIMITED GO — Partial signal. Consider routing to subset of queries."
 
     write_summary(decisions, verdict)
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"FINAL: {verdict}")
     print(f"Total time: {time.time() - start:.1f}s")
     print(f"Artifacts in {EXPERIMENT_DIR}/")

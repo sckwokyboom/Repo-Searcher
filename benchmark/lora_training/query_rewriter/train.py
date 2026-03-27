@@ -1,11 +1,3 @@
-"""
-LoRA fine-tuning of Qwen2.5-Coder-1.5B for query rewriting.
-
-Trains the model to transform natural language queries into structured
-retrieval-oriented JSON with project-specific terms and search hints.
-Uses PEFT LoRA for parameter-efficient training on Apple Silicon (MPS).
-"""
-
 import json
 import sys
 from pathlib import Path
@@ -43,7 +35,9 @@ def main():
 
     print("Loading base model (float16 on MPS)...")
     model = AutoModelForCausalLM.from_pretrained(
-        BASE_MODEL, dtype=torch.float16, trust_remote_code=True,
+        BASE_MODEL,
+        dtype=torch.float16,
+        trust_remote_code=True,
     ).to("mps")
 
     lora_config = LoraConfig(
@@ -52,15 +46,19 @@ def main():
         lora_alpha=16,
         lora_dropout=0.05,
         target_modules=[
-            "q_proj", "k_proj", "v_proj", "o_proj",
-            "gate_proj", "up_proj", "down_proj",
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
         ],
     )
 
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
 
-    # Load datasets
     MAX_TRAIN = 2000
     MAX_VAL = 300
     print("Loading datasets...")

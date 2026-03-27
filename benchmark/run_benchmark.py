@@ -1,5 +1,3 @@
-"""Main CLI entry point for the retrieval benchmark pipeline."""
-
 import argparse
 import json
 import logging
@@ -23,7 +21,11 @@ from benchmark.config import (
     EvalResults,
     RetrievalResult,
 )
-from benchmark.clone_and_index import clone_and_index_all, repo_id_from_name, validate_samples
+from benchmark.clone_and_index import (
+    clone_and_index_all,
+    repo_id_from_name,
+    validate_samples,
+)
 from benchmark.evaluator import evaluate
 from benchmark.extract_samples import extract_samples
 from benchmark.retrievers import RETRIEVER_REGISTRY, get_retriever
@@ -34,25 +36,46 @@ logger = logging.getLogger(__name__)
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Retrieval Benchmark for Repo-Searcher")
-    parser.add_argument("--jsonl", default="/Users/sckwoky/Downloads/claude-20250813.jsonl",
-                        help="Path to the JSONL dataset")
+    parser = argparse.ArgumentParser(
+        description="Retrieval Benchmark for Repo-Searcher"
+    )
+    parser.add_argument(
+        "--jsonl",
+        default="/Users/sckwoky/Downloads/claude-20250813.jsonl",
+        help="Path to the JSONL dataset",
+    )
     parser.add_argument("--max-repos", type=int, default=DEFAULT_MAX_REPOS)
     parser.add_argument("--min-samples", type=int, default=DEFAULT_MIN_SAMPLES)
-    parser.add_argument("--top-k", default="1,3,5,10,20",
-                        help="Comma-separated K values")
-    parser.add_argument("--retrievers", default="bm25,vector,rrf",
-                        help=f"Comma-separated retrievers. Available: {','.join(RETRIEVER_REGISTRY.keys())}")
-    parser.add_argument("--skip-extract", action="store_true",
-                        help="Reuse cached benchmark_samples.json")
-    parser.add_argument("--skip-index", action="store_true",
-                        help="Reuse cached indexes")
-    parser.add_argument("--skip-retrieve", action="store_true",
-                        help="Reuse cached raw_results.json")
-    parser.add_argument("--max-k", type=int, default=20,
-                        help="Max top-K to retrieve (should be >= max of --top-k)")
-    parser.add_argument("--exclude-repos", default="",
-                        help="Comma-separated repo names to exclude (e.g. 'hmislk/hmis,dotCMS/core')")
+    parser.add_argument(
+        "--top-k", default="1,3,5,10,20", help="Comma-separated K values"
+    )
+    parser.add_argument(
+        "--retrievers",
+        default="bm25,vector,rrf",
+        help=f"Comma-separated retrievers. Available: {','.join(RETRIEVER_REGISTRY.keys())}",
+    )
+    parser.add_argument(
+        "--skip-extract",
+        action="store_true",
+        help="Reuse cached benchmark_samples.json",
+    )
+    parser.add_argument(
+        "--skip-index", action="store_true", help="Reuse cached indexes"
+    )
+    parser.add_argument(
+        "--skip-retrieve", action="store_true", help="Reuse cached raw_results.json"
+    )
+    parser.add_argument(
+        "--max-k",
+        type=int,
+        default=20,
+        help="Max top-K to retrieve (should be >= max of --top-k)",
+    )
+    parser.add_argument(
+        "--exclude-repos",
+        default="",
+        help="Comma-separated repo names to exclude (e.g. 'hmislk/hmis,dotCMS/core')",
+    )
     return parser.parse_args()
 
 
@@ -83,10 +106,11 @@ def stage_index(dataset: BenchmarkDataset, skip: bool) -> BenchmarkDataset:
     if not skip:
         clone_and_index_all(dataset)
 
-    # Validate samples
     print("\nValidating samples against indexes...")
     filtered, stats = validate_samples(dataset)
-    print(f"\nAfter validation: {filtered.total_samples} samples across {filtered.total_repos} repos")
+    print(
+        f"\nAfter validation: {filtered.total_samples} samples across {filtered.total_repos} repos"
+    )
     return filtered
 
 
@@ -124,45 +148,51 @@ def stage_retrieve(
                     print(f"  [{query_num}/{total_queries}] {sample.query[:60]}...")
 
                 try:
-                    results, elapsed = retriever.retrieve_timed(sample.query, top_k=max_k)
+                    results, elapsed = retriever.retrieve_timed(
+                        sample.query, top_k=max_k
+                    )
 
-                    # Extract file paths and method names from chunks
                     retrieved_files = []
                     retrieved_methods = []
                     scores = []
                     seen_files = set()
 
                     for chunk, score in results:
-                        # Deduplicate files but keep order
                         if chunk.file_path not in seen_files:
                             retrieved_files.append(chunk.file_path)
                             seen_files.add(chunk.file_path)
-                        if chunk.method_name and chunk.method_name not in retrieved_methods:
+                        if (
+                            chunk.method_name
+                            and chunk.method_name not in retrieved_methods
+                        ):
                             retrieved_methods.append(chunk.method_name)
                         scores.append(score)
 
-                    all_results.append(RetrievalResult(
-                        sample_id=sample.event_id,
-                        retriever=ret_name,
-                        retrieved_files=retrieved_files,
-                        retrieved_methods=retrieved_methods,
-                        scores=scores,
-                        top_k=max_k,
-                    ))
+                    all_results.append(
+                        RetrievalResult(
+                            sample_id=sample.event_id,
+                            retriever=ret_name,
+                            retrieved_files=retrieved_files,
+                            retrieved_methods=retrieved_methods,
+                            scores=scores,
+                            top_k=max_k,
+                        )
+                    )
                 except Exception as e:
                     print(f"    ERROR: {e}")
-                    all_results.append(RetrievalResult(
-                        sample_id=sample.event_id,
-                        retriever=ret_name,
-                        retrieved_files=[],
-                        retrieved_methods=[],
-                        scores=[],
-                        top_k=max_k,
-                    ))
+                    all_results.append(
+                        RetrievalResult(
+                            sample_id=sample.event_id,
+                            retriever=ret_name,
+                            retrieved_files=[],
+                            retrieved_methods=[],
+                            scores=[],
+                            top_k=max_k,
+                        )
+                    )
 
-    # Save raw results
     RAW_RESULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(RAW_RESULTS_PATH, 'w') as f:
+    with open(RAW_RESULTS_PATH, "w") as f:
         json.dump([r.model_dump() for r in all_results], f, indent=2)
     print(f"\nSaved raw results to {RAW_RESULTS_PATH}")
 
@@ -185,9 +215,8 @@ def stage_evaluate(
 
     eval_results = evaluate(all_samples, results, k_values)
 
-    # Save
     EVAL_RESULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(EVAL_RESULTS_PATH, 'w') as f:
+    with open(EVAL_RESULTS_PATH, "w") as f:
         json.dump(eval_results.model_dump(), f, indent=2)
     print(f"Saved eval results to {EVAL_RESULTS_PATH}")
 
@@ -195,7 +224,6 @@ def stage_evaluate(
 
 
 def stage_visualize(eval_results: EvalResults, k_values: list[int]):
-    """Stage 5: Print tables and generate plots."""
     print("\n" + "=" * 60)
     print("STAGE 5: Visualization")
     print("=" * 60)
@@ -213,24 +241,24 @@ def main():
     retriever_names = [r.strip() for r in args.retrievers.split(",")]
     max_k = max(max(k_values), args.max_k)
 
-    # Validate retriever names
     for name in retriever_names:
         if name not in RETRIEVER_REGISTRY:
-            print(f"ERROR: Unknown retriever '{name}'. Available: {list(RETRIEVER_REGISTRY.keys())}")
+            print(
+                f"ERROR: Unknown retriever '{name}'. Available: {list(RETRIEVER_REGISTRY.keys())}"
+            )
             sys.exit(1)
 
     start_time = time.time()
-
-    # Pipeline
     dataset = stage_extract(args)
 
-    # Exclude repos if specified
     if args.exclude_repos:
         exclude = {r.strip() for r in args.exclude_repos.split(",")}
         dataset.repos = {k: v for k, v in dataset.repos.items() if k not in exclude}
         dataset.total_samples = sum(len(s) for s in dataset.repos.values())
         dataset.total_repos = len(dataset.repos)
-        print(f"After excluding {exclude}: {dataset.total_samples} samples across {dataset.total_repos} repos")
+        print(
+            f"After excluding {exclude}: {dataset.total_samples} samples across {dataset.total_repos} repos"
+        )
 
     dataset = stage_index(dataset, args.skip_index)
     results = stage_retrieve(dataset, retriever_names, max_k, args.skip_retrieve)

@@ -1,14 +1,3 @@
-"""
-Evaluate LoRA query rewriter vs baselines on jdereg/java-util.
-
-Compares 3 modes:
-1. Baseline: raw user query -> BM25
-2. Base model rewrite: query -> Qwen (no LoRA) -> parse JSON -> BM25
-3. LoRA rewrite: query -> Qwen+LoRA -> parse JSON -> BM25
-
-Metrics: Recall@1, Recall@5, Recall@10, MRR
-"""
-
 import gc
 import json
 import os
@@ -28,13 +17,16 @@ import numpy as np
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from app.indexer.bm25_builder import tokenize
-from app.indexer.store import load_bm25, load_chunks
+from backend.app.indexer.bm25_builder import tokenize, BM25Okapi
+from backend.app.indexer.store import load_bm25, load_chunks
+from backend.app.models.search import CodeChunk
 
 REPO_ID = "jdereg--java-util"
 REPO_NAME = "jdereg/java-util"
 BASE_MODEL_NAME = "Qwen/Qwen2.5-Coder-1.5B"
-LORA_PATH = str(ROOT / "benchmark" / "lora_training" / "output" / "rewriter_lora" / "final")
+LORA_PATH = str(
+    ROOT / "benchmark" / "lora_training" / "output" / "rewriter_lora" / "final"
+)
 SAMPLES_PATH = ROOT / "benchmark" / "results" / "benchmark_samples.json"
 RESULTS_DIR = ROOT / "benchmark" / "results"
 K_VALUES = [1, 5, 10, 20]
@@ -45,18 +37,28 @@ REWRITE_PROMPT = (
 )
 
 
-def generate(model, tokenizer, prompt, device, max_new_tokens=256):
-    inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024).to(device)
+def generate(
+    model: torch.nn.Module,
+    tokenizer: torch.nn.Module,
+    prompt: str,
+    device: torch.device,
+    max_new_tokens=256,
+):
+    inputs = tokenizer(
+        prompt, return_tensors="pt", truncation=True, max_length=1024
+    ).to(device)
     with torch.no_grad():
         outputs = model.generate(
-            **inputs, max_new_tokens=max_new_tokens, do_sample=False,
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
             pad_token_id=tokenizer.eos_token_id,
         )
-    new_tokens = outputs[0][inputs["input_ids"].shape[1]:]
+    new_tokens = outputs[0][inputs["input_ids"].shape[1] :]
     return tokenizer.decode(new_tokens, skip_special_tokens=True)
 
 
-def parse_rewrite(raw, original_query):
+def parse_rewrite(raw: str, original_query: str):
     json_str = raw.strip()
     if "```" in json_str:
         for part in json_str.split("```")[1:]:
@@ -69,7 +71,7 @@ def parse_rewrite(raw, original_query):
     start = json_str.find("{")
     end = json_str.rfind("}")
     if start != -1 and end > start:
-        json_str = json_str[start:end + 1]
+        json_str = json_str[start : end + 1]
     try:
         data = json.loads(json_str)
         parts = []
@@ -79,17 +81,17 @@ def parse_rewrite(raw, original_query):
                     parts.append(v)
         if parts:
             return " ".join(parts), True
-    except (json.JSONDecodeError, TypeError):
+    except json.JSONDecodeError, TypeError:
         pass
     return f"{original_query} {raw.strip()[:300]}", False
 
 
-def bm25_search(query_str, bm25, chunks, top_k=20):
+def bm25_search(query_str: str, bm25: BM25Okapi, chunks: list[CodeChunk], top_k=20):
     tokens = tokenize(query_str)
     if not tokens:
         return [], []
     scores = bm25.get_scores(tokens)
-    top_indices = np.argsort(scores)[::-1][:top_k * 3]
+    top_indices = np.argsort(scores)[::-1][: top_k * 3]
     files, methods, seen = [], [], set()
     for idx in top_indices:
         if scores[idx] <= 0:
@@ -151,14 +153,16 @@ def run_mode_rewrite(samples, bm25, chunks, model, tokenizer, device, ret_name):
         if valid:
             json_valid += 1
         files, methods = bm25_search(rewritten, bm25, chunks, top_k=max_k)
-        results.append({
-            "sample_id": s["event_id"],
-            "retriever": ret_name,
-            "retrieved_files": files,
-            "retrieved_methods": methods,
-            "scores": [],
-            "top_k": max_k,
-        })
+        results.append(
+            {
+                "sample_id": s["event_id"],
+                "retriever": ret_name,
+                "retrieved_files": files,
+                "retrieved_methods": methods,
+                "scores": [],
+                "top_k": max_k,
+            }
+        )
         files_map[s["event_id"]] = files
         raw_map[s["event_id"]] = raw
 
@@ -170,7 +174,6 @@ def main():
     device = "mps" if torch.backends.mps.is_available() else "cpu"
     max_k = max(K_VALUES)
 
-    # Load data
     print("Loading benchmark samples...")
     with open(SAMPLES_PATH) as f:
         data = json.load(f)
@@ -186,35 +189,40 @@ def main():
     raw_results_map = {}
     json_stats = {}
 
-    # --- Mode 1: Raw BM25 ---
     print("\n" + "=" * 60)
     print("MODE 1: BM25 (raw query)")
     print("=" * 60)
     for s in samples:
         files, methods = bm25_search(s["query"], bm25, chunks, top_k=max_k)
-        all_results.append({
-            "sample_id": s["event_id"],
-            "retriever": "BM25_raw",
-            "retrieved_files": files,
-            "retrieved_methods": methods,
-            "scores": [],
-            "top_k": max_k,
-        })
+        all_results.append(
+            {
+                "sample_id": s["event_id"],
+                "retriever": "BM25_raw",
+                "retrieved_files": files,
+                "retrieved_methods": methods,
+                "scores": [],
+                "top_k": max_k,
+            }
+        )
         raw_results_map[s["event_id"]] = files
     print(f"  Done: {len(samples)} queries")
 
-    # --- Load tokenizer once ---
     print("\nLoading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL_NAME, trust_remote_code=True)
 
-    # --- Mode 2: Base model rewrite ---
     print("\n" + "=" * 60)
     print("MODE 2: Base Qwen rewrite (no LoRA)")
     print("=" * 60)
     print(f"  Loading model on {device}...")
-    base_model = AutoModelForCausalLM.from_pretrained(
-        BASE_MODEL_NAME, dtype=torch.float16, trust_remote_code=True,
-    ).to(device).eval()
+    base_model = (
+        AutoModelForCausalLM.from_pretrained(
+            BASE_MODEL_NAME,
+            dtype=torch.float16,
+            trust_remote_code=True,
+        )
+        .to(device)
+        .eval()
+    )
 
     base_results, base_files_map, base_raw_map, base_valid = run_mode_rewrite(
         samples, bm25, chunks, base_model, tokenizer, device, "BM25_base_rewrite"
@@ -229,7 +237,6 @@ def main():
         torch.mps.empty_cache()
     print("  Memory freed")
 
-    # --- Mode 3: LoRA rewrite ---
     print("\n" + "=" * 60)
     print("MODE 3: LoRA Qwen rewrite")
     print("=" * 60)
@@ -243,7 +250,9 @@ def main():
 
         print(f"  Loading base + LoRA on {device}...")
         lora_base = AutoModelForCausalLM.from_pretrained(
-            BASE_MODEL_NAME, dtype=torch.float16, trust_remote_code=True,
+            BASE_MODEL_NAME,
+            dtype=torch.float16,
+            trust_remote_code=True,
         )
         lora_model = PeftModel.from_pretrained(lora_base, LORA_PATH)
         lora_model = lora_model.to(device).eval()
@@ -260,7 +269,6 @@ def main():
         if hasattr(torch.mps, "empty_cache"):
             torch.mps.empty_cache()
 
-    # --- Mode 4: Combined raw + LoRA rewrite ---
     print("\n" + "=" * 60)
     print("MODE 4: BM25 (raw query + LoRA rewrite combined)")
     print("=" * 60)
@@ -274,20 +282,21 @@ def main():
             # Combine original query with rewritten terms
             combined_query = f"{s['query']} {rewritten}"
             files, methods = bm25_search(combined_query, bm25, chunks, top_k=max_k)
-            all_results.append({
-                "sample_id": eid,
-                "retriever": "BM25_combined",
-                "retrieved_files": files,
-                "retrieved_methods": methods,
-                "scores": [],
-                "top_k": max_k,
-            })
+            all_results.append(
+                {
+                    "sample_id": eid,
+                    "retriever": "BM25_combined",
+                    "retrieved_files": files,
+                    "retrieved_methods": methods,
+                    "scores": [],
+                    "top_k": max_k,
+                }
+            )
             combined_files_map[eid] = files
         print(f"  Done: {len(samples)} queries")
     else:
         print("  Skipped (no LoRA results)")
 
-    # --- Compute & print metrics ---
     print("\n" + "=" * 60)
     print("RESULTS")
     print("=" * 60)
@@ -305,7 +314,6 @@ def main():
             row += f" {m.get(f'recall@{k}', 0):>7.3f} {m.get(f'mrr@{k}', 0):>7.3f}"
         print(row)
 
-    # --- Qualitative examples ---
     ground_truth = {s["event_id"]: set(s["changed_files"]) for s in samples}
     qualitative = []
     print("\nQUALITATIVE EXAMPLES")
@@ -337,18 +345,22 @@ def main():
         if q["lora_raw"]:
             print(f"  LoRA output: {q['lora_raw'][:150]}")
 
-    # --- Save reports ---
     elapsed = time.time() - start
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
     with open(RESULTS_DIR / "rewriter_experiment_results.json", "w") as f:
-        json.dump({
-            "metrics": metrics,
-            "qualitative_examples": qualitative,
-            "json_parse_stats": json_stats,
-            "elapsed_seconds": round(elapsed, 1),
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-        }, f, indent=2, ensure_ascii=False)
+        json.dump(
+            {
+                "metrics": metrics,
+                "qualitative_examples": qualitative,
+                "json_parse_stats": json_stats,
+                "elapsed_seconds": round(elapsed, 1),
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            },
+            f,
+            indent=2,
+            ensure_ascii=False,
+        )
 
     with open(RESULTS_DIR / "rewriter_experiment_report.md", "w") as f:
         f.write("# Query Rewriter LoRA Experiment Report\n\n")
@@ -366,7 +378,9 @@ def main():
             m = metrics[ret]
             f.write(f"| {ret} |")
             for k in K_VALUES:
-                f.write(f" {m.get(f'recall@{k}', 0):.3f} | {m.get(f'mrr@{k}', 0):.3f} |")
+                f.write(
+                    f" {m.get(f'recall@{k}', 0):.3f} | {m.get(f'mrr@{k}', 0):.3f} |"
+                )
             f.write("\n")
         f.write(f"\n## JSON Parse Success\n\n")
         for mode, stats in json_stats.items():
@@ -381,7 +395,9 @@ def main():
                 f.write(f"**LoRA output:**\n```\n{q['lora_raw'][:500]}\n```\n\n")
             if q.get("base_raw"):
                 f.write(f"**Base output:**\n```\n{q['base_raw'][:500]}\n```\n\n")
-            f.write(f"BM25 hit@5: {q['raw_hit']} | Base hit@5: {q['base_hit']} | LoRA hit@5: {q['lora_hit']}\n\n---\n\n")
+            f.write(
+                f"BM25 hit@5: {q['raw_hit']} | Base hit@5: {q['base_hit']} | LoRA hit@5: {q['lora_hit']}\n\n---\n\n"
+            )
 
     print(f"\nReports saved to {RESULTS_DIR}")
     print(f"Total time: {elapsed:.1f}s")
