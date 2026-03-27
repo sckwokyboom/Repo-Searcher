@@ -26,19 +26,19 @@ export default function MCTSTreePanel({ trace }: Props) {
   const [expanded, setExpanded] = useState(true);
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null);
 
-  const root = trace.nodes.find((n) => n.parent_id === null);
+  const root = trace.nodes.find((n: MCTSNode) => n.parent_id === null);
   if (!root) return null;
 
   const bestNode = trace.nodes.find(
-    (n) => n.is_best && n.children_ids.length === 0
+    (n: MCTSNode) => n.is_best && n.children_ids.length === 0
   );
 
   const iterations = getIterationGroups(trace.nodes);
-  const maxReward = Math.max(...trace.nodes.map((n) => n.avg_reward), 0.001);
+  const maxReward = Math.max(...trace.nodes.map((n: MCTSNode) => n.avg_reward), 0.001);
 
   const detailNode =
     selectedNodeId !== null
-      ? trace.nodes.find((n) => n.id === selectedNodeId)
+      ? trace.nodes.find((n: MCTSNode) => n.id === selectedNodeId)
       : null;
 
   return (
