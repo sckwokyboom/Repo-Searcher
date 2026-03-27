@@ -1,4 +1,5 @@
 import os
+
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 # Import torch before faiss to avoid OpenMP crash on macOS
@@ -34,24 +35,13 @@ app = FastAPI(
 )
 
 
-logger.info("starting...")
-if settings.dist_path.is_dir():
-    logger.info(f"Found dist path: {settings.dist_path}")
-    app.mount("/assets", StaticFiles(directory=settings.dist_path / "assets"), name="static")
-
-    @app.get("/{full_path:path}")
-    async def serve_react_app(full_path: str):
-        file_path = settings.dist_path / full_path
-        
-        if file_path.exists() and file_path.is_file():
-            return FileResponse(file_path)
-            
-        return FileResponse(settings.dist_path / "index.html")
-
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.frontend_url, "http://localhost:5173"],
+    allow_origins=[
+        settings.frontend_url,
+        "http://localhost:5173",
+        "http://localhost:8000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -66,3 +56,19 @@ app.include_router(ws.router, prefix="/api")
 @app.get("/api/health")
 async def health():
     return {"status": "ok"}
+
+
+if settings.dist_path.is_dir():
+    logger.info(f"Found dist path: {settings.dist_path}")
+    app.mount(
+        "/assets", StaticFiles(directory=settings.dist_path / "assets"), name="static"
+    )
+
+    @app.get("/{full_path:path}")
+    async def serve_react_app(full_path: str):
+        file_path = settings.dist_path / full_path
+
+        if file_path.exists() and file_path.is_file():
+            return FileResponse(file_path)
+
+        return FileResponse(settings.dist_path / "index.html")
