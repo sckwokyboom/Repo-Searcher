@@ -12,7 +12,6 @@ const STEPS: { key: IndexingStep; label: string }[] = [
   { key: "cloning", label: "Clone" },
   { key: "parsing", label: "Parse" },
   { key: "building_bm25", label: "BM25" },
-  { key: "building_vectors", label: "Vectors" },
   { key: "building_callgraph", label: "Call Graph" },
   { key: "saving", label: "Save" },
 ];

@@ -32,9 +32,10 @@ async def search_code(repo_id: str, request: SearchRequest):
 
     return SearchResponse(
         query=request.query,
+        rewritten_query=results.get("rewritten_query"),
         expanded_keywords=results.get("expanded_keywords", []),
+        rewrite_details=results.get("rewrite_details"),
         results=results["results"],
         search_time_ms=round(elapsed, 1),
-        mcts_trace=results.get("mcts_trace"),
-        graph_mcts_trace=results.get("graph_mcts_trace"),
+        lora_active=results.get("lora_active", False),
     )

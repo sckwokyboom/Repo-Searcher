@@ -2,6 +2,8 @@ from collections import defaultdict
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from pydantic import BaseModel
+
 from app.models.repo import IndexingProgress
 
 router = APIRouter(tags=["websocket"])
@@ -19,15 +21,15 @@ class ConnectionManager:
         if ws in self.connections[repo_id]:
             self.connections[repo_id].remove(ws)
 
-    async def broadcast(self, repo_id: str, progress: IndexingProgress):
+    async def broadcast(self, channel: str, progress: BaseModel):
         dead = []
-        for ws in self.connections[repo_id]:
+        for ws in self.connections[channel]:
             try:
                 await ws.send_json(progress.model_dump(mode="json"))
             except Exception:
                 dead.append(ws)
         for ws in dead:
-            self.connections[repo_id].remove(ws)
+            self.connections[channel].remove(ws)
 
 
 connection_manager = ConnectionManager()
@@ -41,3 +43,14 @@ async def indexing_ws(websocket: WebSocket, repo_id: str):
             await websocket.receive_text()
     except WebSocketDisconnect:
         connection_manager.disconnect(repo_id, websocket)
+
+
+@router.websocket("/ws/lora/{repo_id}")
+async def lora_ws(websocket: WebSocket, repo_id: str):
+    channel = f"lora_{repo_id}"
+    await connection_manager.connect(channel, websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        connection_manager.disconnect(channel, websocket)

@@ -9,8 +9,23 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
 from trl import SFTTrainer
 
 DATA_DIR = Path(__file__).parent / "data"
-OUTPUT_DIR = Path(__file__).parent.parent / "output" / "rewriter_lora"
 BASE_MODEL = "Qwen/Qwen2.5-Coder-1.5B"
+
+# Version-specific paths
+VERSION_CONFIG = {
+    "v2": {
+        "train": "train_rewriter_v2.jsonl",
+        "val": "val_rewriter_v2.jsonl",
+        "output": "rewriter_lora_v2",
+        "epochs": 3,
+    },
+    "v3": {
+        "train": "train_rewriter_v3.jsonl",
+        "val": "val_rewriter_v3.jsonl",
+        "output": "rewriter_lora_v3",
+        "epochs": 5,
+    },
+}
 
 
 def load_data(path: Path) -> Dataset:
@@ -25,9 +40,20 @@ def load_data(path: Path) -> Dataset:
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--version", default="v3", choices=list(VERSION_CONFIG.keys()))
+    args = parser.parse_args()
+
+    cfg = VERSION_CONFIG[args.version]
+    output_dir = Path(__file__).parent.parent / "output" / cfg["output"]
+    train_path = DATA_DIR / cfg["train"]
+    val_path = DATA_DIR / cfg["val"]
+    num_epochs = cfg["epochs"]
+
+    print(f"Version: {args.version}")
     print(f"Base model: {BASE_MODEL}")
-    print(f"Training data: {DATA_DIR / 'train_rewriter.jsonl'}")
-    print(f"Output: {OUTPUT_DIR}")
+    print(f"Training data: {train_path}")
+    print(f"Output: {output_dir}")
 
     tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL, trust_remote_code=True)
     if tokenizer.pad_token is None:
@@ -62,18 +88,18 @@ def main():
     MAX_TRAIN = 2000
     MAX_VAL = 300
     print("Loading datasets...")
-    train_dataset = load_data(DATA_DIR / "train_rewriter.jsonl")
-    val_dataset = load_data(DATA_DIR / "val_rewriter.jsonl")
+    train_dataset = load_data(train_path)
+    val_dataset = load_data(val_path)
     if len(train_dataset) > MAX_TRAIN:
         train_dataset = train_dataset.shuffle(seed=42).select(range(MAX_TRAIN))
     if len(val_dataset) > MAX_VAL:
         val_dataset = val_dataset.shuffle(seed=42).select(range(MAX_VAL))
     print(f"Train: {len(train_dataset)}, Val: {len(val_dataset)}")
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
     training_args = TrainingArguments(
-        output_dir=str(OUTPUT_DIR),
-        num_train_epochs=3,
+        output_dir=str(output_dir),
+        num_train_epochs=num_epochs,
         per_device_train_batch_size=2,
         per_device_eval_batch_size=2,
         gradient_accumulation_steps=8,
@@ -109,7 +135,7 @@ def main():
     print("\nStarting training...")
     trainer.train()
 
-    final_path = OUTPUT_DIR / "final"
+    final_path = output_dir / "final"
     model.save_pretrained(str(final_path))
     tokenizer.save_pretrained(str(final_path))
     print(f"\nAdapter saved to {final_path}")

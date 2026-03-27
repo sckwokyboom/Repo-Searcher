@@ -25,8 +25,6 @@ export default function SearchResultCard({ result, rank, onShowGraph }: Props) {
   const [expanded, setExpanded] = useState(rank === 0);
   const { chunk } = result;
 
-  const isGraphDiscovery = result.source === "graph_mcts";
-
   const displayName = chunk.class_name
     ? chunk.method_name
       ? `${chunk.class_name}.${chunk.method_name}`
@@ -38,11 +36,8 @@ export default function SearchResultCard({ result, rank, onShowGraph }: Props) {
       sx={{
         mb: 2,
         transition: "all 0.2s",
-        borderLeft: isGraphDiscovery ? "3px solid #ff9800" : undefined,
         "&:hover": {
-          borderColor: isGraphDiscovery
-            ? "rgba(255, 152, 0, 0.5)"
-            : "rgba(124, 77, 255, 0.3)",
+          borderColor: "rgba(124, 77, 255, 0.3)",
         },
       }}
     >
@@ -55,32 +50,12 @@ export default function SearchResultCard({ result, rank, onShowGraph }: Props) {
           }}
         >
           <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, flex: 1, minWidth: 0 }}>
-            {isGraphDiscovery ? (
-              <Tooltip
-                title={`Found via Call Graph: ${result.relation === "calls" ? "called by" : "calls"} ${result.discovered_via || "..."}`}
-              >
-                <Chip
-                  icon={<AccountTreeIcon sx={{ fontSize: "16px !important" }} />}
-                  label="Graph"
-                  size="small"
-                  sx={{
-                    fontWeight: 700,
-                    minWidth: 40,
-                    bgcolor: "rgba(255, 152, 0, 0.15)",
-                    color: "#ff9800",
-                    borderColor: "rgba(255, 152, 0, 0.3)",
-                  }}
-                  variant="outlined"
-                />
-              </Tooltip>
-            ) : (
-              <Chip
-                label={`#${rank + 1}`}
-                size="small"
-                color="primary"
-                sx={{ fontWeight: 700, minWidth: 40 }}
-              />
-            )}
+            <Chip
+              label={`#${rank + 1}`}
+              size="small"
+              color="primary"
+              sx={{ fontWeight: 700, minWidth: 40 }}
+            />
             <Typography variant="subtitle1" fontWeight={600} noWrap>
               {displayName}
             </Typography>
@@ -140,20 +115,9 @@ export default function SearchResultCard({ result, rank, onShowGraph }: Props) {
             variant="outlined"
             sx={{ height: 20, fontSize: 11 }}
           />
-          {isGraphDiscovery && result.discovered_via && (
-            <Typography variant="caption" sx={{ color: "#ff9800", fontSize: 11 }}>
-              {result.relation === "calls" ? "called by" : "calls"}{" "}
-              <strong>{result.discovered_via.split("::").pop()}</strong>
-            </Typography>
-          )}
           {result.bm25_rank && (
             <Typography variant="caption" color="text.secondary">
               BM25: #{result.bm25_rank}
-            </Typography>
-          )}
-          {result.vector_rank && (
-            <Typography variant="caption" color="text.secondary">
-              Vec: #{result.vector_rank}
             </Typography>
           )}
         </Box>

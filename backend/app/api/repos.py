@@ -53,12 +53,21 @@ async def search_repos(q: str = Query(..., min_length=1)):
 
 @router.get("/repos/indexed", response_model=list[RepoInfo])
 async def list_indexed_repos():
+    from app.ml.lora_registry import has_adapter
+
     registry_path = settings.indexes_dir / "registry.json"
     if not registry_path.exists():
         return []
     with open(registry_path) as f:
         repos = json.load(f)
-    return [RepoInfo(**r) for r in repos]
+
+    result = []
+    for r in repos:
+        info = RepoInfo(**r)
+        # Always check live LoRA status (adapter may exist on disk but not in registry)
+        info.has_lora_adapter = has_adapter(info.repo_id)
+        result.append(info)
+    return result
 
 
 @router.post("/repos/index", status_code=202)

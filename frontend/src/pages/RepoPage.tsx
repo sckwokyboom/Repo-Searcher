@@ -4,19 +4,24 @@ import {
   Alert,
   Box,
   Button,
+  Chip,
   CircularProgress,
   LinearProgress,
   Typography,
 } from "@mui/material";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
-import type { RepoInfo } from "../types";
+import AutoFixHighIcon from "@mui/icons-material/AutoFixHigh";
+import type { RepoInfo, LoRAStatus } from "../types";
 import { getRepoStatus, indexRepo } from "../services/repoService";
+import { getLoRAStatus } from "../services/loraService";
 import { useIndexingProgress } from "../hooks/useIndexingProgress";
 import { useCodeSearch } from "../hooks/useCodeSearch";
+import { useLoRATraining } from "../hooks/useLoRATraining";
 import IndexingProgress from "../components/IndexingProgress";
 import CodeSearchBar from "../components/CodeSearchBar";
 import SearchResultList from "../components/SearchResultList";
 import CallGraphPanel from "../components/CallGraphPanel";
+import LoRATrainingPanel from "../components/LoRATrainingPanel";
 
 export default function RepoPage() {
   const { owner, name } = useParams<{ owner: string; name: string }>();
@@ -28,9 +33,12 @@ export default function RepoPage() {
   const [loading, setLoading] = useState(true);
   const [isIndexing, setIsIndexing] = useState(false);
   const [selectedMethod, setSelectedMethod] = useState<string | null>(null);
+  const [loraStatus, setLoraStatus] = useState<LoRAStatus | null>(null);
+  const [isLoRATraining, setIsLoRATraining] = useState(false);
 
   const { progress } = useIndexingProgress(isIndexing ? repoId : null);
   const { response, loading: searching, error, search } = useCodeSearch(repoId);
+  const { progress: loraProgress } = useLoRATraining(status === "done" ? repoId : null);
 
   const checkStatus = useCallback(async () => {
     try {
@@ -47,9 +55,25 @@ export default function RepoPage() {
     }
   }, [repoId]);
 
+  const fetchLoRAStatus = useCallback(async () => {
+    try {
+      const data = await getLoRAStatus(repoId);
+      setLoraStatus(data);
+      setIsLoRATraining(data.is_training);
+    } catch {
+      // Repo might not be indexed yet
+    }
+  }, [repoId]);
+
   useEffect(() => {
     checkStatus();
   }, [checkStatus]);
+
+  useEffect(() => {
+    if (status === "done") {
+      fetchLoRAStatus();
+    }
+  }, [status, fetchLoRAStatus]);
 
   useEffect(() => {
     if (progress?.step === "done") {
@@ -58,6 +82,14 @@ export default function RepoPage() {
       checkStatus();
     }
   }, [progress?.step, checkStatus]);
+
+  // Watch LoRA training completion
+  useEffect(() => {
+    if (loraProgress?.step === "done" || loraProgress?.step === "failed" || loraProgress?.step === "cancelled") {
+      setIsLoRATraining(false);
+      fetchLoRAStatus();
+    }
+  }, [loraProgress?.step, fetchLoRAStatus]);
 
   const handleStartIndex = async () => {
     const repo: RepoInfo = {
@@ -71,6 +103,7 @@ export default function RepoPage() {
       language: "Java",
       indexed_at: null,
       chunk_count: 0,
+      has_lora_adapter: false,
     };
 
     try {
@@ -97,9 +130,26 @@ export default function RepoPage() {
     <Box>
       {/* Header */}
       <Box sx={{ mb: 4 }}>
-        <Typography variant="h5" sx={{ mb: 0.5 }}>
-          {fullName}
-        </Typography>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mb: 0.5 }}>
+          <Typography variant="h5">
+            {fullName}
+          </Typography>
+          {loraStatus?.has_adapter && (
+            <Chip
+              icon={<AutoFixHighIcon sx={{ fontSize: "16px !important" }} />}
+              label="LoRA"
+              size="small"
+              sx={{
+                height: 24,
+                fontSize: 11,
+                fontWeight: 700,
+                bgcolor: "rgba(124,77,255,0.12)",
+                color: "#7c4dff",
+                "& .MuiChip-icon": { color: "#7c4dff" },
+              }}
+            />
+          )}
+        </Box>
         {repoInfo?.description && (
           <Typography variant="body2" color="text.secondary">
             {repoInfo.description}
@@ -135,25 +185,38 @@ export default function RepoPage() {
       {/* Ready for search */}
       {isReady && (
         <>
-          <Box sx={{ mb: 3 }}>
-            <CodeSearchBar onSearch={search} loading={searching} />
-          </Box>
+          {/* LoRA Training Panel */}
+          <LoRATrainingPanel
+            repoId={repoId}
+            loraStatus={loraStatus}
+            trainingProgress={loraProgress}
+            onTrainingStarted={() => setIsLoRATraining(true)}
+            onTrainingDone={fetchLoRAStatus}
+          />
 
-          {searching && <LinearProgress sx={{ mb: 2 }} />}
+          {!isLoRATraining && (
+            <>
+              <Box sx={{ mb: 3 }}>
+                <CodeSearchBar onSearch={search} loading={searching} />
+              </Box>
 
-          {error && (
-            <Alert severity="error" sx={{ mb: 2 }}>
-              {error}
-            </Alert>
-          )}
+              {searching && <LinearProgress sx={{ mb: 2 }} />}
 
-          {response && (
-            <SearchResultList
-              response={response}
-              onShowGraph={(id) =>
-                setSelectedMethod(selectedMethod === id ? null : id)
-              }
-            />
+              {error && (
+                <Alert severity="error" sx={{ mb: 2 }}>
+                  {error}
+                </Alert>
+              )}
+
+              {response && (
+                <SearchResultList
+                  response={response}
+                  onShowGraph={(id) =>
+                    setSelectedMethod(selectedMethod === id ? null : id)
+                  }
+                />
+              )}
+            </>
           )}
 
           {selectedMethod && (

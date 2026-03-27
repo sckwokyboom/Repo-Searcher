@@ -6,6 +6,7 @@ import {
   Typography,
   Chip,
 } from "@mui/material";
+import AutoFixHighIcon from "@mui/icons-material/AutoFixHigh";
 import FolderIcon from "@mui/icons-material/Folder";
 import StarIcon from "@mui/icons-material/Star";
 import type { RepoInfo } from "../types";
@@ -58,6 +59,21 @@ export default function RepoCard({ repo, onClick }: Props) {
               color="primary"
               variant="outlined"
             />
+            {repo.has_lora_adapter && (
+              <Chip
+                icon={<AutoFixHighIcon sx={{ fontSize: "14px !important" }} />}
+                label="LoRA"
+                size="small"
+                sx={{
+                  height: 22,
+                  fontSize: 10,
+                  fontWeight: 700,
+                  bgcolor: "rgba(124,77,255,0.12)",
+                  color: "#7c4dff",
+                  "& .MuiChip-icon": { color: "#7c4dff" },
+                }}
+              />
+            )}
             {repo.indexed_at && (
               <Typography variant="caption" color="text.secondary">
                 Indexed {new Date(repo.indexed_at).toLocaleDateString()}
