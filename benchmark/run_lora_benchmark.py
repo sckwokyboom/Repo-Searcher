@@ -61,7 +61,7 @@ def run_retriever(retriever_name, dataset, max_k=20):
             event_id = sample_data["event_id"]
 
             if query_num % 10 == 1:
-                print(f"  [{query_num}/{total}] {query[:60]}...", flush=True)
+                print(f"[{query_num}/{total}] {query[:60]}...", flush=True)
 
             try:
                 t0 = time.time()
@@ -90,7 +90,7 @@ def run_retriever(retriever_name, dataset, max_k=20):
                     }
                 )
             except Exception as e:
-                print(f"    ERROR: {e}", flush=True)
+                print(f"ERROR: {e}", flush=True)
                 results.append(
                     {
                         "sample_id": event_id,
@@ -153,8 +153,8 @@ def print_table(metrics, k_values=[1, 3, 5, 10, 20]):
 
     header = f"{'Retriever':<25}"
     for k in k_values:
-        header += f" {'R@' + str(k):>7} {'MRR@' + str(k):>7}"
-    header += f" {'Samples':>8}"
+        header += f"{'R@' + str(k):>7} {'MRR@' + str(k):>7}"
+    header += f"{'Samples':>8}"
     print("\n" + "=" * len(header))
     print(header)
     print("=" * len(header))
@@ -163,9 +163,9 @@ def print_table(metrics, k_values=[1, 3, 5, 10, 20]):
         m = metrics[ret]
         row = f"{ret:<25}"
         for k in k_values:
-            row += f" {m.get(f'recall@{k}', 0):.3f}   {m.get(f'mrr@{k}', 0):.3f}"
+            row += f"{m.get(f'recall@{k}', 0):.3f}   {m.get(f'mrr@{k}', 0):.3f}"
             row += " "
-        row += f" {m['total_samples']:>7}"
+        row += f"{m['total_samples']:>7}"
         print(row)
 
     print("=" * len(header))
@@ -199,7 +199,7 @@ def save_results(metrics, all_results, elapsed):
         f.write("## Recall@K (File-Level)\n\n")
         f.write("| Retriever |")
         for k in k_values:
-            f.write(f" R@{k} | MRR@{k} |")
+            f.write(f"R@{k} | MRR@{k} |")
         f.write("\n")
         f.write("|---|")
         for _ in k_values:
@@ -211,7 +211,7 @@ def save_results(metrics, all_results, elapsed):
             f.write(f"| {ret} |")
             for k in k_values:
                 f.write(
-                    f" {m.get(f'recall@{k}', 0):.3f} | {m.get(f'mrr@{k}', 0):.3f} |"
+                    f"{m.get(f'recall@{k}', 0):.3f} | {m.get(f'mrr@{k}', 0):.3f} |"
                 )
             f.write("\n")
 
@@ -234,7 +234,7 @@ def main():
         print(f"\nLoading cached fast results from {cached_fast_path}", flush=True)
         with open(cached_fast_path) as f:
             all_results = json.load(f)
-        print(f"  Loaded {len(all_results)} cached results")
+        print(f"Loaded {len(all_results)} cached results")
     else:
         print("\n" + "=" * 60)
         print("PHASE 1: Fast retrievers (BM25, FileAgg)")
@@ -243,7 +243,7 @@ def main():
             print(f"\n--- {ret_name} ---", flush=True)
             t0 = time.time()
             results = run_retriever(ret_name, dataset)
-            print(f"  Done in {time.time() - t0:.1f}s ({len(results)} results)")
+            print(f"Done in {time.time() - t0:.1f}s ({len(results)} results)")
             all_results.extend(results)
 
         with open(cached_fast_path, "w") as f:
@@ -263,7 +263,7 @@ def main():
             print(f"\n--- {ret_name} ---", flush=True)
             t0 = time.time()
             results = run_retriever(ret_name, dataset)
-            print(f"  Done in {time.time() - t0:.1f}s ({len(results)} results)")
+            print(f"Done in {time.time() - t0:.1f}s ({len(results)} results)")
             all_results.extend(results)
 
     elapsed = time.time() - start

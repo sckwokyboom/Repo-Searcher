@@ -68,7 +68,7 @@ class IndexingOrchestrator:
             await self._emit(
                 IndexingStep.PARSING,
                 1.0,
-                f"Parsing complete: {len(chunks)} chunks from {java_files_count} files",
+                f"parsed {java_files_count} Java files",
             )
 
             if not chunks:

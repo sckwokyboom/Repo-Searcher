@@ -46,7 +46,9 @@ class ModelManager:
     @property
     def qwen(self):
         if self._qwen is None:
-            use_lora = self._lora_adapter_path and Path(self._lora_adapter_path).exists()
+            use_lora = (
+                self._lora_adapter_path and Path(self._lora_adapter_path).exists()
+            )
             use_fp32 = use_lora or self.device == "cpu"
             dtype = torch.float32 if use_fp32 else torch.float16
 

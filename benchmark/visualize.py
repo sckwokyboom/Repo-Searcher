@@ -8,19 +8,15 @@ from rich.text import Text
 from benchmark.config import AggregatedMetrics, EvalResults, PLOTS_DIR, RESULTS_DIR
 import matplotlib
 import matplotlib.pyplot as plt
+from rich.console import Console
+from rich.table import Table
 
 
 matplotlib.use("Agg")
 
 
 def print_summary_table(eval_results: EvalResults, k_values: list[int] | None = None):
-    try:
-        from rich.console import Console
-        from rich.table import Table
-
-        _print_rich_table(eval_results, k_values)
-    except ImportError:
-        _print_plain_table(eval_results, k_values)
+    _print_rich_table(eval_results, k_values)
 
 
 def _print_rich_table(eval_results: EvalResults, k_values: list[int] | None = None):
@@ -124,28 +120,6 @@ def _print_rich_table(eval_results: EvalResults, k_values: list[int] | None = No
             repo_table.add_row(*row)
 
         console.print(repo_table)
-
-
-def _print_plain_table(eval_results: EvalResults, k_values: list[int] | None = None):
-    k_values = k_values or [1, 3, 5, 10, 20]
-
-    header = f"{'Retriever':<20}"
-    for k in k_values:
-        header += f"{'R@' + str(k):>10}"
-    header += f"{'MRR':>10}{'Hit@5':>10}{'Hit@10':>10}{'N':>8}"
-    print("\n" + header)
-    print("-" * len(header))
-
-    for agg in eval_results.per_retriever:
-        row = f"{agg.retriever:<20}"
-        for k in k_values:
-            row += f"{agg.recall_at_k.get(k, 0):>10.3f}"
-        row += f"{agg.mrr:>10.3f}"
-        row += f"{agg.hit_at_k.get(5, 0):>10.3f}"
-        row += f"{agg.hit_at_k.get(10, 0):>10.3f}"
-        row += f"{agg.num_samples:>8}"
-        print(row)
-    print()
 
 
 def plot_results(eval_results: EvalResults, output_dir: Path | None = None):
@@ -287,7 +261,7 @@ def save_results_markdown(
     header = "| Retriever |"
     sep = "|-----------|"
     for k in k_values:
-        header += f" R@{k} |"
+        header += f"R@{k} |"
         sep += "------|"
     header += " MRR | Hit@5 | Hit@10 |"
     sep += "------|-------|--------|"
@@ -297,8 +271,8 @@ def save_results_markdown(
     for agg in eval_results.per_retriever:
         row = f"| {agg.retriever} |"
         for k in k_values:
-            row += f" {agg.recall_at_k.get(k, 0):.3f} |"
-        row += f" {agg.mrr:.3f} | {agg.hit_at_k.get(5, 0):.3f} | {agg.hit_at_k.get(10, 0):.3f} |"
+            row += f"{agg.recall_at_k.get(k, 0):.3f} |"
+        row += f"{agg.mrr:.3f} | {agg.hit_at_k.get(5, 0):.3f} | {agg.hit_at_k.get(10, 0):.3f} |"
         lines.append(row)
 
     # Per-repo breakdown
@@ -307,7 +281,7 @@ def save_results_markdown(
         header = "| Repository |"
         sep = "|------------|"
         for r in retrievers:
-            header += f" {r} |"
+            header += f"{r} |"
             sep += "------|"
         header += " N |"
         sep += "---|"
@@ -319,8 +293,8 @@ def save_results_markdown(
             row = f"| {repo} |"
             for r in retrievers:
                 a = agg_by_name.get(r)
-                row += f" {a.recall_at_k.get(5, 0):.3f} |" if a else " - |"
-            row += f" {aggs[0].num_samples if aggs else 0} |"
+                row += f"{a.recall_at_k.get(5, 0):.3f} |" if a else " - |"
+            row += f"{aggs[0].num_samples if aggs else 0} |"
             lines.append(row)
 
     lines.append("")

@@ -40,7 +40,7 @@ def extract_samples(
             total_lines += 1
             if total_lines % 50000 == 0:
                 print(
-                    f"  Processed {total_lines} lines, found {java_lines} Java samples...",
+                    f"Processed {total_lines} lines, found {java_lines} Java samples...",
                     flush=True,
                 )
 
@@ -79,14 +79,14 @@ def extract_samples(
             )
 
     print(
-        f"  Done: {total_lines} total lines, {java_lines} Java samples across {len(repo_samples)} repos",
+        f"Done: {total_lines} total lines, {java_lines} Java samples across {len(repo_samples)} repos",
         flush=True,
     )
 
     repo_counts = sorted(repo_samples.items(), key=lambda x: len(x[1]), reverse=True)
     print("\nTop 20 repos by sample count:")
     for repo, samples in repo_counts[:20]:
-        print(f"  {repo}: {len(samples)} samples")
+        print(f"{repo}: {len(samples)} samples")
 
     selected_repos: dict[str, list[BenchmarkSample]] = {}
     total_selected = 0
@@ -111,7 +111,7 @@ def extract_samples(
     )
     for repo, samples in selected_repos.items():
         lq = sum(1 for s in samples if s.low_quality)
-        print(f"  {repo}: {len(samples)} samples ({lq} low-quality)")
+        print(f"{repo}: {len(samples)} samples ({lq} low-quality)")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w") as f:

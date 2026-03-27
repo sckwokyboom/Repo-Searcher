@@ -2,33 +2,28 @@ import os
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
-import logging
 
 from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
-from app.api import repos, search, graph, ws, lora
+from app.api import graph, lora, repos, search, ws
 from app.config import settings
-
+from app.ml.lora_registry import get_adapter_path
+from app.ml.model_manager import get_model_manager
 
 logger = logging.getLogger("uvicorn.startup")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Pre-initialize ModelManager with default LoRA adapter if available
-    from app.ml.lora_registry import get_adapter_path
     default_adapter = get_adapter_path(settings.default_lora_repo_id)
     if default_adapter:
-        from app.ml.model_manager import get_model_manager
-        import logging
-        logger = logging.getLogger(__name__)
         logger.info(f"Default LoRA adapter found: {default_adapter}")
-        # Don't eagerly load — just configure the path for first use
         get_model_manager(lora_adapter_path=str(default_adapter))
     yield
 
@@ -43,9 +38,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "*"
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

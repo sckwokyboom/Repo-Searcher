@@ -19,6 +19,8 @@ dependencies = [
     "peft>=0.18.1",
     "websockets>=16.0",
     "uvicorn[standard]>=0.42.0",
+    "datasets>=4.8.4",
+    "trl>=0.29.1",
 ]
 
 [[tool.uv.index]]

@@ -8,23 +8,25 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "backend"))
 
+from sklearn.metrics import roc_auc_score
+
+from backend.app.config import settings
+from backend.app.indexer.store import load_chunks
 from benchmark.clone_and_index import repo_id_from_name
 from benchmark.config import (
+    SAMPLES_PATH,
     BenchmarkDataset,
     BenchmarkSample,
     RetrievalResult,
-    SAMPLES_PATH,
 )
-from benchmark.evaluator import compute_sample_metrics, aggregate_metrics
+from benchmark.evaluator import aggregate_metrics, compute_sample_metrics
 from benchmark.retrievers import (
     BM25FileAgg,
     SafeGraphExpansionV2,
-    _build_file_chunk_index,
     _build_chunk_id_index,
+    _build_file_chunk_index,
     _get_call_graph,
 )
-from backend.app.config import settings
-from backend.app.indexer.store import load_chunks
 
 EXPERIMENT_DIR = Path(__file__).parent / "results" / "graph_frontier_v2"
 N_SAMPLES = 75
@@ -46,7 +48,7 @@ def _indexed_repos(dataset: BenchmarkDataset) -> dict[str, list[BenchmarkSample]
         if (index_dir / "chunks.json").exists():
             filtered[repo] = samples
         else:
-            print(f"  Skipping {repo} (no index)")
+            print(f"Skipping {repo} (no index)")
     return filtered
 
 
@@ -99,7 +101,7 @@ def save_json(data, filename: str):
     path = EXPERIMENT_DIR / filename
     with open(path, "w") as f:
         json.dump(data, f, indent=2, default=str)
-    print(f"  Saved {path}")
+    print(f"Saved {path}")
 
 
 def run_e0_oracle_coverage(
@@ -196,10 +198,10 @@ def run_e0_oracle_coverage(
         "per_query": per_query,
     }
 
-    print(f"  Coverage@10 baseline: {mean_baseline:.4f}")
-    print(f"  Coverage@20 pool:     {mean_pool:.4f}")
-    print(f"  Delta:                {delta:+.4f}")
-    print(f"  GO: {go}")
+    print(f"Coverage@10 baseline: {mean_baseline:.4f}")
+    print(f"Coverage@20 pool:     {mean_pool:.4f}")
+    print(f"Delta:                {delta:+.4f}")
+    print(f"GO: {go}")
 
     return result
 
@@ -222,13 +224,13 @@ def run_e1_safe_expansion(
         gt_files = set(sample.changed_files)
 
         if qi % 10 == 0:
-            print(f"  [{qi + 1}/{len(queries)}] {repo_name}: {sample.query[:60]}...")
+            print(f"[{qi + 1}/{len(queries)}] {repo_name}: {sample.query[:60]}...")
 
         baseline_ret = make_retriever(BM25FileAgg, repo_id, cache)
         try:
             bl_results = baseline_ret.retrieve(sample.query, top_k=TOP_K)
         except Exception as e:
-            print(f"    ERROR baseline: {e}")
+            print(f"ERROR baseline: {e}")
             bl_results = []
 
         bl_files = []
@@ -246,7 +248,7 @@ def run_e1_safe_expansion(
         try:
             v2_raw, diag = v2_ret.retrieve_with_diagnostics(sample.query, top_k=TOP_K)
         except Exception as e:
-            print(f"    ERROR v2: {e}")
+            print(f"ERROR v2: {e}")
             v2_raw = bl_results
             diag = {}
 
@@ -350,16 +352,16 @@ def run_e1_safe_expansion(
     }
 
     print(f"\n  {'Mode':<20} {'Hit@5':>8} {'Hit@10':>8} {'MRR':>8} {'Recall@10':>10}")
-    print(f"  {'-' * 56}")
+    print(f"{'-' * 56}")
     print(
-        f"  {'Baseline':<20} {bl_agg.hit_at_k.get(5, 0):>8.4f} {bl_agg.hit_at_k.get(10, 0):>8.4f} {bl_agg.mrr:>8.4f} {bl_agg.recall_at_k.get(10, 0):>10.4f}"
+        f"{'Baseline':<20} {bl_agg.hit_at_k.get(5, 0):>8.4f} {bl_agg.hit_at_k.get(10, 0):>8.4f} {bl_agg.mrr:>8.4f} {bl_agg.recall_at_k.get(10, 0):>10.4f}"
     )
     print(
-        f"  {'SafeGraphV2':<20} {v2_agg.hit_at_k.get(5, 0):>8.4f} {v2_agg.hit_at_k.get(10, 0):>8.4f} {v2_agg.mrr:>8.4f} {v2_agg.recall_at_k.get(10, 0):>10.4f}"
+        f"{'SafeGraphV2':<20} {v2_agg.hit_at_k.get(5, 0):>8.4f} {v2_agg.hit_at_k.get(10, 0):>8.4f} {v2_agg.mrr:>8.4f} {v2_agg.recall_at_k.get(10, 0):>10.4f}"
     )
-    print(f"  Delta:   dHit@5={d_hit5:+.4f}  dHit@10={d_hit10:+.4f}  dMRR={d_mrr:+.4f}")
-    print(f"  Helped: {helped}, Hurt: {hurt}")
-    print(f"  GO: {go}")
+    print(f"Delta:   dHit@5={d_hit5:+.4f}  dHit@10={d_hit10:+.4f}  dMRR={d_mrr:+.4f}")
+    print(f"Helped: {helped}, Hurt: {hurt}")
+    print(f"GO: {go}")
 
     return result
 
@@ -388,7 +390,7 @@ def run_e2_edge_direction(
             try:
                 raw_results = ret.retrieve(sample.query, top_k=TOP_K)
             except Exception as e:
-                print(f"    ERROR [{direction}]: {e}")
+                print(f"ERROR [{direction}]: {e}")
                 raw_results = []
 
             files = []
@@ -418,7 +420,7 @@ def run_e2_edge_direction(
             "mrr": round(agg.mrr, 4),
             "recall10": round(agg.recall_at_k.get(10, 0), 4),
         }
-        print(f"  Hit@10={agg.hit_at_k.get(10, 0):.4f}  MRR={agg.mrr:.4f}")
+        print(f"Hit@10={agg.hit_at_k.get(10, 0):.4f}  MRR={agg.mrr:.4f}")
 
     best_dir = max(
         directions,
@@ -520,22 +522,22 @@ def run_e3_diagnostics(
         "candidates": all_candidates,
     }
 
-    print(f"  Total candidates:           {n_candidates}")
-    print(f"  Positives:                  {n_positive} ({positive_rate:.2%})")
-    print(f"  Graph-only candidates:      {n_graph_only}")
+    print(f"Total candidates:           {n_candidates}")
+    print(f"Positives:                  {n_positive} ({positive_rate:.2%})")
+    print(f"Graph-only candidates:      {n_graph_only}")
     print(
-        f"  Graph-only positives:       {n_graph_only_positive} ({graph_only_positive_rate:.2%})"
+        f"Graph-only positives:       {n_graph_only_positive} ({graph_only_positive_rate:.2%})"
     )
     print(
-        f"  Queries with GT expansion:  {queries_with_expansion_gt} / {n_queries} ({expansion_gt_rate:.2%})"
+        f"Queries with GT expansion:  {queries_with_expansion_gt} / {n_queries} ({expansion_gt_rate:.2%})"
     )
-    print(f"  GO: {go}")
+    print(f"GO: {go}")
 
     jsonl_path = EXPERIMENT_DIR / "frontier_dataset.jsonl"
     with open(jsonl_path, "w") as f:
         for c in all_candidates:
             f.write(json.dumps(c, default=str) + "\n")
-    print(f"  Saved {jsonl_path} ({n_candidates} entries)")
+    print(f"Saved {jsonl_path} ({n_candidates} entries)")
 
     return result
 
@@ -576,19 +578,19 @@ def run_e4_llm_probe(
                 break
 
     probe_queries = probe_queries[:20]
-    print(f"  Selected {len(probe_queries)} probe queries")
+    print(f"Selected {len(probe_queries)} probe queries")
 
     probe_pairs = []
     for sid in probe_queries:
         for c in query_candidates[sid]:
             probe_pairs.append(c)
-    print(f"  Total probe pairs: {len(probe_pairs)}")
+    print(f"Total probe pairs: {len(probe_pairs)}")
 
     if not probe_pairs:
         return {"go": False, "reason": "no probe pairs", "n_pairs": 0}
 
     MODEL_NAME = "Qwen/Qwen2.5-Coder-1.5B"
-    print(f"  Loading {MODEL_NAME}...")
+    print(f"Loading {MODEL_NAME}...")
     device = (
         "mps"
         if torch.backends.mps.is_available()
@@ -604,7 +606,7 @@ def run_e4_llm_probe(
         ).to(device)
         model.eval()
     except Exception as e:
-        print(f"  ERROR loading model: {e}")
+        print(f"ERROR loading model: {e}")
         return {"go": False, "reason": f"model load failed: {e}", "n_pairs": 0}
     yes_ids = set()
     no_ids = set()
@@ -617,7 +619,7 @@ def run_e4_llm_probe(
         if ids:
             no_ids.add(ids[0])
 
-    print(f"  Yes token IDs: {yes_ids}, No token IDs: {no_ids}")
+    print(f"Yes token IDs: {yes_ids}, No token IDs: {no_ids}")
 
     chunk_cache: dict[str, dict] = {}  # repo_id -> {fp -> chunk_info}
     for pair in probe_pairs:
@@ -643,10 +645,10 @@ def run_e4_llm_probe(
             chunk_cache[repo_id] = by_fp
 
     probe_results = []
-    print(f"  Running probe on {len(probe_pairs)} pairs...")
+    print(f"Running probe on {len(probe_pairs)} pairs...")
     for pi, pair in enumerate(probe_pairs):
         if pi % 20 == 0:
-            print(f"    [{pi + 1}/{len(probe_pairs)}]...")
+            print(f"[{pi + 1}/{len(probe_pairs)}]...")
 
         repo_id = repo_id_from_name(pair["repo"])
         by_fp = chunk_cache.get(repo_id, {})
@@ -688,7 +690,7 @@ def run_e4_llm_probe(
             p_yes = yes_exp / (yes_exp + no_exp)
 
         except Exception as e:
-            print(f"    ERROR at pair {pi}: {e}")
+            print(f"ERROR at pair {pi}: {e}")
             p_yes = 0.5
 
         probe_results.append(
@@ -729,18 +731,10 @@ def run_e4_llm_probe(
     pairwise_accuracy = pairwise_correct / max(1, pairwise_total)
 
     auc = 0.5
-    try:
-        from sklearn.metrics import roc_auc_score
-
-        labels = [r["is_gt"] for r in probe_results]
-        scores = [r["p_yes"] for r in probe_results]
-        if len(set(labels)) > 1:
-            auc = roc_auc_score(labels, scores)
-    except ImportError:
-        print("  sklearn not available, computing AUC from pairwise accuracy")
-        auc = pairwise_accuracy
-    except Exception:
-        pass
+    labels = [r["is_gt"] for r in probe_results]
+    scores = [r["p_yes"] for r in probe_results]
+    if len(set(labels)) > 1:
+        auc = roc_auc_score(labels, scores)
 
     go = (pairwise_accuracy >= 0.60) or (auc >= 0.65)
 
@@ -760,14 +754,14 @@ def run_e4_llm_probe(
     }
 
     print(f"\n  Positives: {len(positives)}, Negatives: {len(negatives)}")
-    print(f"  Avg p(Yes) pos: {avg_pos:.4f}")
-    print(f"  Avg p(Yes) neg: {avg_neg:.4f}")
-    print(f"  Score gap:      {score_gap:+.4f}")
+    print(f"Avg p(Yes) pos: {avg_pos:.4f}")
+    print(f"Avg p(Yes) neg: {avg_neg:.4f}")
+    print(f"Score gap:      {score_gap:+.4f}")
     print(
-        f"  Pairwise acc:   {pairwise_accuracy:.4f} ({pairwise_correct}/{pairwise_total})"
+        f"Pairwise acc:   {pairwise_accuracy:.4f} ({pairwise_correct}/{pairwise_total})"
     )
-    print(f"  AUC:            {auc:.4f}")
-    print(f"  GO: {go}")
+    print(f"AUC:            {auc:.4f}")
+    print(f"GO: {go}")
 
     del model
     del tokenizer
@@ -815,12 +809,12 @@ def run_e5_smoke_lora(
     train_data = train_samples[:split_idx]
     val_data = train_samples[split_idx:]
 
-    print(f"  Train: {len(train_data)}, Val: {len(val_data)}")
+    print(f"Train: {len(train_data)}, Val: {len(val_data)}")
 
     train_pos = sum(s["is_gt"] for s in train_data)
     val_pos = sum(s["is_gt"] for s in val_data)
-    print(f"  Train positives: {train_pos}/{len(train_data)}")
-    print(f"  Val positives:   {val_pos}/{len(val_data)}")
+    print(f"Train positives: {train_pos}/{len(train_data)}")
+    print(f"Val positives:   {val_pos}/{len(val_data)}")
 
     if val_pos == 0 or val_pos == len(val_data):
         return {"success": False, "reason": "val set has no class diversity"}
@@ -835,7 +829,7 @@ def run_e5_smoke_lora(
         else ("cuda" if torch.cuda.is_available() else "cpu")
     )
 
-    print(f"  Loading {MODEL_NAME} for LoRA training...")
+    print(f"Loading {MODEL_NAME} for LoRA training...")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -900,17 +894,17 @@ def run_e5_smoke_lora(
         processing_class=tokenizer,
     )
 
-    print("  Training...")
+    print("Training...")
     trainer.train()
 
     final_path = output_dir / "final"
     model.save_pretrained(str(final_path))
     tokenizer.save_pretrained(str(final_path))
-    print(f"  Adapter saved to {final_path}")
+    print(f"Adapter saved to {final_path}")
 
     eval_metrics = trainer.evaluate()
     eval_loss = eval_metrics.get("eval_loss", float("inf"))
-    print(f"  Eval loss: {eval_loss:.4f}")
+    print(f"Eval loss: {eval_loss:.4f}")
 
     model.eval()
     yes_ids = set()
@@ -986,10 +980,10 @@ def run_e5_smoke_lora(
         "val_predictions": val_preds,
     }
 
-    print(f"  LoRA pairwise acc:   {lora_pw:.4f}")
-    print(f"  Frozen pairwise acc: {frozen_pw:.4f}")
-    print(f"  Class collapse:      {class_collapse}")
-    print(f"  Success: {success}")
+    print(f"LoRA pairwise acc:   {lora_pw:.4f}")
+    print(f"Frozen pairwise acc: {frozen_pw:.4f}")
+    print(f"Class collapse:      {class_collapse}")
+    print(f"Success: {success}")
 
     del model, trainer
     if torch.backends.mps.is_available():
@@ -1123,7 +1117,7 @@ def run_all():
         decisions["E5_smoke_lora"] = e5
         save_json(e5, "e5_lora_results.json")
     except Exception as e:
-        print(f"  E5 SKIPPED: {e}")
+        print(f"E5 SKIPPED: {e}")
         decisions["E5_smoke_lora"] = {"success": False, "reason": str(e)}
 
     all_pass = all(

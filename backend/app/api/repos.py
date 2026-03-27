@@ -5,7 +5,10 @@ from pathlib import Path
 import httpx
 from fastapi import APIRouter, HTTPException, Query
 
+from app.api.ws import connection_manager
 from app.config import settings
+from app.indexer.orchestrator import IndexingOrchestrator
+from app.ml.lora_registry import has_adapter
 from app.models.repo import (
     GitHubSearchResult,
     IndexingProgress,
@@ -53,7 +56,6 @@ async def search_repos(q: str = Query(..., min_length=1)):
 
 @router.get("/repos/indexed", response_model=list[RepoInfo])
 async def list_indexed_repos():
-    from app.ml.lora_registry import has_adapter
 
     registry_path = settings.indexes_dir / "registry.json"
     if not registry_path.exists():
@@ -64,7 +66,6 @@ async def list_indexed_repos():
     result = []
     for r in repos:
         info = RepoInfo(**r)
-        # Always check live LoRA status (adapter may exist on disk but not in registry)
         info.has_lora_adapter = has_adapter(info.repo_id)
         result.append(info)
     return result
@@ -72,8 +73,6 @@ async def list_indexed_repos():
 
 @router.post("/repos/index", status_code=202)
 async def index_repo(repo: RepoInfo):
-    from app.indexer.orchestrator import IndexingOrchestrator
-    from app.api.ws import connection_manager
 
     if repo.repo_id in active_tasks and not active_tasks[repo.repo_id].done():
         raise HTTPException(status_code=409, detail="Indexing already in progress")

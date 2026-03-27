@@ -145,7 +145,7 @@ def stage_retrieve(
             for sample in samples:
                 query_num += 1
                 if query_num % 10 == 1 or query_num == total_queries:
-                    print(f"  [{query_num}/{total_queries}] {sample.query[:60]}...")
+                    print(f"[{query_num}/{total_queries}] {sample.query[:60]}...")
 
                 try:
                     results, elapsed = retriever.retrieve_timed(
@@ -179,7 +179,7 @@ def stage_retrieve(
                         )
                     )
                 except Exception as e:
-                    print(f"    ERROR: {e}")
+                    print(f"ERROR: {e}")
                     all_results.append(
                         RetrievalResult(
                             sample_id=sample.event_id,

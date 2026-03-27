@@ -15,9 +15,10 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 import numpy as np
 import torch
+from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from backend.app.indexer.bm25_builder import tokenize, BM25Okapi
+from backend.app.indexer.bm25_builder import BM25Okapi, tokenize
 from backend.app.indexer.store import load_bm25, load_chunks
 from backend.app.models.search import CodeChunk
 
@@ -146,7 +147,7 @@ def run_mode_rewrite(samples, bm25, chunks, model, tokenizer, device, ret_name):
 
     for i, s in enumerate(samples):
         if (i + 1) % 10 == 1:
-            print(f"  [{i + 1}/{len(samples)}] {s['query'][:60]}...", flush=True)
+            print(f"[{i + 1}/{len(samples)}] {s['query'][:60]}...", flush=True)
         prompt = REWRITE_PROMPT.format(query=s["query"])
         raw = generate(model, tokenizer, prompt, device)
         rewritten, valid = parse_rewrite(raw, s["query"])
@@ -178,12 +179,12 @@ def main():
     with open(SAMPLES_PATH) as f:
         data = json.load(f)
     samples = data["repos"].get(REPO_NAME, [])
-    print(f"  {len(samples)} samples for {REPO_NAME}")
+    print(f"{len(samples)} samples for {REPO_NAME}")
 
     print("Loading BM25 index...")
     chunks = load_chunks(REPO_ID)
     bm25, _ = load_bm25(REPO_ID)
-    print(f"  {len(chunks)} chunks indexed")
+    print(f"{len(chunks)} chunks indexed")
 
     all_results = []
     raw_results_map = {}
@@ -205,7 +206,7 @@ def main():
             }
         )
         raw_results_map[s["event_id"]] = files
-    print(f"  Done: {len(samples)} queries")
+    print(f"Done: {len(samples)} queries")
 
     print("\nLoading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL_NAME, trust_remote_code=True)
@@ -213,7 +214,7 @@ def main():
     print("\n" + "=" * 60)
     print("MODE 2: Base Qwen rewrite (no LoRA)")
     print("=" * 60)
-    print(f"  Loading model on {device}...")
+    print(f"Loading model on {device}...")
     base_model = (
         AutoModelForCausalLM.from_pretrained(
             BASE_MODEL_NAME,
@@ -229,13 +230,13 @@ def main():
     )
     all_results.extend(base_results)
     json_stats["base_model"] = {"valid": base_valid, "total": len(samples)}
-    print(f"  JSON valid: {base_valid}/{len(samples)}")
+    print(f"JSON valid: {base_valid}/{len(samples)}")
 
     del base_model
     gc.collect()
     if hasattr(torch.mps, "empty_cache"):
         torch.mps.empty_cache()
-    print("  Memory freed")
+    print("Memory freed")
 
     print("\n" + "=" * 60)
     print("MODE 3: LoRA Qwen rewrite")
@@ -244,11 +245,9 @@ def main():
     lora_raw_map = {}
 
     if not Path(LORA_PATH).exists():
-        print(f"  ERROR: LoRA adapter not found at {LORA_PATH}")
+        print(f"ERROR: LoRA adapter not found at {LORA_PATH}")
     else:
-        from peft import PeftModel
-
-        print(f"  Loading base + LoRA on {device}...")
+        print(f"Loading base + LoRA on {device}...")
         lora_base = AutoModelForCausalLM.from_pretrained(
             BASE_MODEL_NAME,
             dtype=torch.float16,
@@ -262,7 +261,7 @@ def main():
         )
         all_results.extend(lora_results)
         json_stats["lora_model"] = {"valid": lora_valid, "total": len(samples)}
-        print(f"  JSON valid: {lora_valid}/{len(samples)}")
+        print(f"JSON valid: {lora_valid}/{len(samples)}")
 
         del lora_model, lora_base
         gc.collect()
@@ -277,9 +276,7 @@ def main():
         for s in samples:
             eid = s["event_id"]
             raw_output = lora_raw_map.get(eid, "")
-            # Parse the JSON from LoRA output and extract search terms
             rewritten, _ = parse_rewrite(raw_output, "")
-            # Combine original query with rewritten terms
             combined_query = f"{s['query']} {rewritten}"
             files, methods = bm25_search(combined_query, bm25, chunks, top_k=max_k)
             all_results.append(
@@ -293,9 +290,9 @@ def main():
                 }
             )
             combined_files_map[eid] = files
-        print(f"  Done: {len(samples)} queries")
+        print(f"Done: {len(samples)} queries")
     else:
-        print("  Skipped (no LoRA results)")
+        print("Skipped (no LoRA results)")
 
     print("\n" + "=" * 60)
     print("RESULTS")
@@ -304,14 +301,14 @@ def main():
 
     header = f"{'Retriever':<25}"
     for k in K_VALUES:
-        header += f" {'R@' + str(k):>7} {'MRR@' + str(k):>7}"
+        header += f"{'R@' + str(k):>7} {'MRR@' + str(k):>7}"
     print("\n" + header)
     print("=" * len(header))
     for ret in metrics:
         m = metrics[ret]
         row = f"{ret:<25}"
         for k in K_VALUES:
-            row += f" {m.get(f'recall@{k}', 0):>7.3f} {m.get(f'mrr@{k}', 0):>7.3f}"
+            row += f"{m.get(f'recall@{k}', 0):>7.3f} {m.get(f'mrr@{k}', 0):>7.3f}"
         print(row)
 
     ground_truth = {s["event_id"]: set(s["changed_files"]) for s in samples}
@@ -337,13 +334,13 @@ def main():
         }
         qualitative.append(q)
         print(f"\nQuery: {s['query'][:80]}")
-        print(f"  GT: {list(gt)[:2]}")
-        print(f"  BM25 hit@5: {q['raw_hit']}")
-        print(f"  Base hit@5: {q['base_hit']}")
-        print(f"  LoRA hit@5: {q['lora_hit']}")
-        print(f"  Combined hit@5: {q['combined_hit']}")
+        print(f"GT: {list(gt)[:2]}")
+        print(f"BM25 hit@5: {q['raw_hit']}")
+        print(f"Base hit@5: {q['base_hit']}")
+        print(f"LoRA hit@5: {q['lora_hit']}")
+        print(f"Combined hit@5: {q['combined_hit']}")
         if q["lora_raw"]:
-            print(f"  LoRA output: {q['lora_raw'][:150]}")
+            print(f"LoRA output: {q['lora_raw'][:150]}")
 
     elapsed = time.time() - start
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -369,7 +366,7 @@ def main():
         f.write(f"**Total time:** {elapsed:.1f}s\n\n")
         f.write("## Metrics Comparison\n\n| Retriever |")
         for k in K_VALUES:
-            f.write(f" R@{k} | MRR@{k} |")
+            f.write(f"R@{k} | MRR@{k} |")
         f.write("\n|---|")
         for _ in K_VALUES:
             f.write("---|---|")
@@ -378,9 +375,7 @@ def main():
             m = metrics[ret]
             f.write(f"| {ret} |")
             for k in K_VALUES:
-                f.write(
-                    f" {m.get(f'recall@{k}', 0):.3f} | {m.get(f'mrr@{k}', 0):.3f} |"
-                )
+                f.write(f"{m.get(f'recall@{k}', 0):.3f} | {m.get(f'mrr@{k}', 0):.3f} |")
             f.write("\n")
         f.write(f"\n## JSON Parse Success\n\n")
         for mode, stats in json_stats.items():
@@ -399,7 +394,7 @@ def main():
                 f"BM25 hit@5: {q['raw_hit']} | Base hit@5: {q['base_hit']} | LoRA hit@5: {q['lora_hit']}\n\n---\n\n"
             )
 
-    print(f"\nReports saved to {RESULTS_DIR}")
+    print(f"Reports saved to {RESULTS_DIR}")
     print(f"Total time: {elapsed:.1f}s")
 
 

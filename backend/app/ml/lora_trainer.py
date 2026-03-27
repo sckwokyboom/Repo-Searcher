@@ -1,10 +1,3 @@
-"""
-Online LoRA trainer — runs fine-tuning as a background task with
-progress reporting and cancellation support.
-
-Adapted from benchmark/lora_training/query_rewriter/train.py.
-"""
-
 import json
 import logging
 import threading
@@ -23,10 +16,10 @@ from transformers import (
     TrainerState,
     TrainingArguments,
 )
-from trl import SFTTrainer
+from trl.trainer.sft_trainer import SFTTrainer
 
 from app.config import settings
-from app.ml.lora_data_generator import generate_training_data, estimate_training_time
+from app.ml.lora_data_generator import estimate_training_time, generate_training_data
 from app.ml.model_manager import reset_model_manager
 from app.models.repo import LoRATrainingProgress, LoRATrainingStep
 from app.models.search import CodeChunk
@@ -39,8 +32,6 @@ class TrainingCancelled(Exception):
 
 
 class _ProgressCallback(TrainerCallback):
-    """Reports training progress and checks for cancellation."""
-
     def __init__(
         self,
         repo_id: str,
@@ -55,10 +46,14 @@ class _ProgressCallback(TrainerCallback):
         self._start_time = time.time()
         self._total_steps = 0
 
-    def on_train_begin(self, args, state: TrainerState, control: TrainerControl, **kwargs):
+    def on_train_begin(
+        self, args, state: TrainerState, control: TrainerControl, **kwargs
+    ):
         self._total_steps = state.max_steps
 
-    def on_log(self, args, state: TrainerState, control: TrainerControl, logs=None, **kwargs):
+    def on_log(
+        self, args, state: TrainerState, control: TrainerControl, logs=None, **kwargs
+    ):
         if self.cancel_event.is_set():
             raise TrainingCancelled()
 
@@ -68,30 +63,36 @@ class _ProgressCallback(TrainerCallback):
         current_step = state.global_step
         progress = current_step / max(self._total_steps, 1)
         elapsed = time.time() - self._start_time
-        eta = int((elapsed / max(current_step, 1)) * (self._total_steps - current_step)) if current_step > 0 else None
+        eta = (
+            int((elapsed / max(current_step, 1)) * (self._total_steps - current_step))
+            if current_step > 0
+            else None
+        )
 
         epoch = int(state.epoch) if state.epoch else 0
 
-        self.progress_fn(LoRATrainingProgress(
-            repo_id=self.repo_id,
-            step=LoRATrainingStep.TRAINING,
-            progress=round(progress, 3),
-            message=f"Step {current_step}/{self._total_steps}",
-            epoch=epoch,
-            total_epochs=self.total_epochs,
-            train_loss=logs.get("loss"),
-            eval_loss=logs.get("eval_loss"),
-            estimated_time_remaining_sec=eta,
-        ))
+        self.progress_fn(
+            LoRATrainingProgress(
+                repo_id=self.repo_id,
+                step=LoRATrainingStep.TRAINING,
+                progress=round(progress, 3),
+                message=f"Step {current_step}/{self._total_steps}",
+                epoch=epoch,
+                total_epochs=self.total_epochs,
+                train_loss=logs.get("loss"),
+                eval_loss=logs.get("eval_loss"),
+                estimated_time_remaining_sec=eta,
+            )
+        )
 
-    def on_epoch_end(self, args, state: TrainerState, control: TrainerControl, **kwargs):
+    def on_epoch_end(
+        self, args, state: TrainerState, control: TrainerControl, **kwargs
+    ):
         if self.cancel_event.is_set():
             raise TrainingCancelled()
 
 
 class LoRATrainer:
-    """Runs LoRA fine-tuning for a specific repository."""
-
     def __init__(
         self,
         repo_id: str,
@@ -105,34 +106,38 @@ class LoRATrainer:
         self.cancel_event = cancel_event
 
     def run(self):
-        """Main training loop — designed to run in a thread pool."""
         try:
             self._run_impl()
         except TrainingCancelled:
             logger.info(f"LoRA training cancelled for {self.repo_id}")
-            self.progress_fn(LoRATrainingProgress(
-                repo_id=self.repo_id,
-                step=LoRATrainingStep.CANCELLED,
-                progress=0.0,
-                message="Training cancelled by user",
-            ))
+            self.progress_fn(
+                LoRATrainingProgress(
+                    repo_id=self.repo_id,
+                    step=LoRATrainingStep.CANCELLED,
+                    progress=0.0,
+                    message="Training cancelled by user",
+                )
+            )
         except Exception as e:
-            logger.exception(f"LoRA training failed for {self.repo_id}")
-            self.progress_fn(LoRATrainingProgress(
-                repo_id=self.repo_id,
-                step=LoRATrainingStep.FAILED,
-                progress=0.0,
-                message=f"Training failed: {str(e)}",
-            ))
+            logger.exception(f"LoRA training failed for {self.repo_id} because: {e}")
+            self.progress_fn(
+                LoRATrainingProgress(
+                    repo_id=self.repo_id,
+                    step=LoRATrainingStep.FAILED,
+                    progress=0.0,
+                    message=f"Training failed: {str(e)}",
+                )
+            )
 
     def _run_impl(self):
-        # Step 1: Generate training data
-        self.progress_fn(LoRATrainingProgress(
-            repo_id=self.repo_id,
-            step=LoRATrainingStep.PREPARING_DATA,
-            progress=0.0,
-            message="Generating training data from indexed code...",
-        ))
+        self.progress_fn(
+            LoRATrainingProgress(
+                repo_id=self.repo_id,
+                step=LoRATrainingStep.PREPARING_DATA,
+                progress=0.0,
+                message="Generating training data from indexed code...",
+            )
+        )
 
         if self.cancel_event.is_set():
             raise TrainingCancelled()
@@ -140,60 +145,66 @@ class LoRATrainer:
         train_samples, val_samples, num_profiles = generate_training_data(self.chunks)
 
         if not train_samples:
-            self.progress_fn(LoRATrainingProgress(
-                repo_id=self.repo_id,
-                step=LoRATrainingStep.FAILED,
-                progress=0.0,
-                message="Not enough data to train — need methods with meaningful bodies",
-            ))
+            self.progress_fn(
+                LoRATrainingProgress(
+                    repo_id=self.repo_id,
+                    step=LoRATrainingStep.FAILED,
+                    progress=0.0,
+                    message="Not enough data to train — need methods with meaningful bodies",
+                )
+            )
             return
 
         logger.info(
-            f"Generated {len(train_samples)} train, {len(val_samples)} val samples "
-            f"from {num_profiles} profiles"
+            f"Generated {len(train_samples)} training samples from {num_profiles} methods"
         )
 
-        self.progress_fn(LoRATrainingProgress(
-            repo_id=self.repo_id,
-            step=LoRATrainingStep.PREPARING_DATA,
-            progress=1.0,
-            message=f"Generated {len(train_samples)} training samples from {num_profiles} methods",
-        ))
+        self.progress_fn(
+            LoRATrainingProgress(
+                repo_id=self.repo_id,
+                step=LoRATrainingStep.PREPARING_DATA,
+                progress=1.0,
+                message=f"Generated {len(train_samples)} training samples from {num_profiles} methods",
+            )
+        )
 
         if self.cancel_event.is_set():
             raise TrainingCancelled()
 
-        # Free search model memory before loading training model
         reset_model_manager()
 
-        # Step 2: Load model and train
-        self.progress_fn(LoRATrainingProgress(
-            repo_id=self.repo_id,
-            step=LoRATrainingStep.TRAINING,
-            progress=0.0,
-            message="Loading base model...",
-            total_epochs=settings.lora_epochs,
-        ))
+        self.progress_fn(
+            LoRATrainingProgress(
+                repo_id=self.repo_id,
+                step=LoRATrainingStep.TRAINING,
+                progress=0.0,
+                message="Loading base model...",
+                total_epochs=settings.lora_epochs,
+            )
+        )
 
-        # Prepare datasets
-        train_ds = Dataset.from_list([
-            {"text": s["prompt"] + "\n" + s["completion"]} for s in train_samples
-        ])
-        val_ds = Dataset.from_list([
-            {"text": s["prompt"] + "\n" + s["completion"]} for s in val_samples
-        ]) if val_samples else None
+        train_ds = Dataset.from_list(
+            [{"text": s["prompt"] + "\n" + s["completion"]} for s in train_samples]
+        )
+        val_ds = (
+            Dataset.from_list(
+                [{"text": s["prompt"] + "\n" + s["completion"]} for s in val_samples]
+            )
+            if val_samples
+            else None
+        )
 
-        # Cap dataset sizes
         if len(train_ds) > 2000:
             train_ds = train_ds.shuffle(seed=42).select(range(2000))
         if val_ds and len(val_ds) > 300:
             val_ds = val_ds.shuffle(seed=42).select(range(300))
 
-        tokenizer = AutoTokenizer.from_pretrained(settings.qwen_model, trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(
+            settings.qwen_model, trust_remote_code=True
+        )
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
-        # Determine device and dtype
         if torch.cuda.is_available():
             device = "cuda"
             dtype = torch.float16
@@ -205,7 +216,9 @@ class LoRATrainer:
             dtype = torch.float32
 
         model = AutoModelForCausalLM.from_pretrained(
-            settings.qwen_model, dtype=dtype, trust_remote_code=True,
+            settings.qwen_model,
+            dtype=dtype,
+            trust_remote_code=True,
         ).to(device)
 
         lora_config = LoraConfig(
@@ -214,8 +227,13 @@ class LoRATrainer:
             lora_alpha=16,
             lora_dropout=0.05,
             target_modules=[
-                "q_proj", "k_proj", "v_proj", "o_proj",
-                "gate_proj", "up_proj", "down_proj",
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj",
             ],
         )
         model = get_peft_model(model, lora_config)
@@ -269,43 +287,44 @@ class LoRATrainer:
 
         trainer.train()
 
-        # Step 3: Save adapter
         if self.cancel_event.is_set():
             raise TrainingCancelled()
 
-        self.progress_fn(LoRATrainingProgress(
-            repo_id=self.repo_id,
-            step=LoRATrainingStep.SAVING,
-            progress=0.5,
-            message="Saving LoRA adapter...",
-        ))
+        self.progress_fn(
+            LoRATrainingProgress(
+                repo_id=self.repo_id,
+                step=LoRATrainingStep.SAVING,
+                progress=0.5,
+                message="Saving LoRA adapter...",
+            )
+        )
 
         final_path = output_dir / "final"
         model.save_pretrained(str(final_path))
         tokenizer.save_pretrained(str(final_path))
 
-        # Clean up training model to free memory
         del model
         del trainer
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         import gc
+
         gc.collect()
 
-        # Update registry
         self._update_registry()
 
-        self.progress_fn(LoRATrainingProgress(
-            repo_id=self.repo_id,
-            step=LoRATrainingStep.DONE,
-            progress=1.0,
-            message="LoRA adapter trained successfully!",
-        ))
+        self.progress_fn(
+            LoRATrainingProgress(
+                repo_id=self.repo_id,
+                step=LoRATrainingStep.DONE,
+                progress=1.0,
+                message="LoRA adapter trained successfully!",
+            )
+        )
 
         logger.info(f"LoRA adapter saved to {final_path}")
 
     def _update_registry(self):
-        """Mark the repo as having a LoRA adapter in registry.json."""
         registry_path = settings.indexes_dir / "registry.json"
         if not registry_path.exists():
             return

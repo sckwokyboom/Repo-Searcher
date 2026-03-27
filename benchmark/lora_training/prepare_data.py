@@ -13,7 +13,6 @@ from backend.app.indexer.bm25_builder import tokenize
 from backend.app.indexer.store import load_bm25, load_chunks
 from benchmark.query_cleaner import clean_query
 
-
 REPOS_FULL_DIR = Path(__file__).parent.parent / "results" / "repos_full_history"
 OUTPUT_DIR = Path(__file__).parent / "data"
 
@@ -163,7 +162,7 @@ def generate_training_samples(
             )
 
     print(
-        f"  Generated {len(samples)} samples ({skipped} commits skipped - files not in index)"
+        f"Generated {len(samples)} samples ({skipped} commits skipped - files not in index)"
     )
     return samples
 
@@ -208,7 +207,7 @@ def main():
 
         print(f"\nProcessing {repo_id}...")
         commits = get_java_commits(repo_path)
-        print(f"  Found {len(commits)} commits with Java changes")
+        print(f"Found {len(commits)} commits with Java changes")
 
         samples = generate_training_samples(repo_id, commits)
         all_samples.extend(samples)

@@ -20,7 +20,12 @@ class Settings(BaseSettings):
     lora_adapters_dir: Path = Path(__file__).parent.parent / "data" / "lora_adapters"
     default_lora_repo_id: str = "jdereg__java-util"
     default_lora_adapter_path: Path = (
-        Path(__file__).parent.parent.parent / "benchmark" / "lora_training" / "output" / "rewriter_lora_v2" / "final"
+        Path(__file__).parent.parent.parent
+        / "benchmark"
+        / "lora_training"
+        / "output"
+        / "rewriter_lora_v2"
+        / "final"
     )
     lora_epochs: int = 3
     lora_batch_size: int = 2

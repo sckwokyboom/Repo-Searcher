@@ -843,7 +843,7 @@ def main():
 
     print(f"Loading chunks for {REPO_ID}...")
     chunks = load_chunks(REPO_ID)
-    print(f"  Loaded {len(chunks)} chunks")
+    print(f"Loaded {len(chunks)} chunks")
 
     print("\nBuilding method profiles with tree-sitter...")
     profiles = []
@@ -852,14 +852,14 @@ def main():
         if profile is not None:
             profiles.append(profile)
 
-    print(f"  Built {len(profiles)} profiles")
+    print(f"Built {len(profiles)} profiles")
     test_profiles = [p for p in profiles if p.is_test]
     impl_profiles = [p for p in profiles if not p.is_test]
-    print(f"  Implementation: {len(impl_profiles)}, Test: {len(test_profiles)}")
+    print(f"Implementation: {len(impl_profiles)}, Test: {len(test_profiles)}")
     with_javadoc = [p for p in profiles if p.javadoc_summary]
-    print(f"  With javadoc: {len(with_javadoc)}")
+    print(f"With javadoc: {len(with_javadoc)}")
     with_tags = [p for p in profiles if p.semantic_tags]
-    print(f"  With semantic tags: {len(with_tags)}")
+    print(f"With semantic tags: {len(with_tags)}")
 
     print("\nSelecting quality methods...")
     profiles.sort(key=lambda p: p.quality_score, reverse=True)
@@ -871,14 +871,14 @@ def main():
     selected = selected_impl + selected_test
     random.shuffle(selected)
     print(
-        f"  Selected {len(selected)} methods ({len(selected_impl)} impl, {len(selected_test)} test)"
+        f"Selected {len(selected)} methods ({len(selected_impl)} impl, {len(selected_test)} test)"
     )
 
     print("\nGenerating training samples...")
     samples, stats = generate_samples(selected)
-    print(f"  Generated {stats['total']} samples (filtered {stats['filtered']})")
+    print(f"Generated {stats['total']} samples (filtered {stats['filtered']})")
     for style, count in stats["style_counts"].items():
-        print(f"    {style}: {count}")
+        print(f"{style}: {count}")
 
     # Dataset-level stats
     test_samples = [s for s in samples if s["is_test"]]
@@ -999,7 +999,7 @@ def generate_examples_report(samples: list[dict]):
     report_path = Path(__file__).parent / "DATASET_EXAMPLES.md"
     with open(report_path, "w") as f:
         f.write("\n".join(lines))
-    print(f"  Saved to {report_path}")
+    print(f"Saved to {report_path}")
 
 
 if __name__ == "__main__":

@@ -1,25 +1,21 @@
-"""
-Simple retriever: LLM query rewrite (Qwen + LoRA) → multi-query BM25 with RRF.
-Call graph neighbors are attached for navigation.
-"""
-
 import json
+import logging
 import re
 from collections import defaultdict
+from typing import TypedDict
 
 import numpy as np
-from typing import TypedDict
+from rank_bm25 import BM25Okapi
 
 from app.config import settings
 from app.indexer.bm25_builder import tokenize
 from app.indexer.store import load_bm25, load_chunks
 from app.ml.lora_registry import get_adapter_path
 from app.ml.model_manager import ensure_lora_adapter, get_model_manager
-from app.models.search import RewriteDetails, SearchResult
+from app.models.search import CodeChunk, RewriteDetails, SearchResult
 from app.search.graph_expander import GraphExpander
-from app.models.search import CodeChunk
-from rank_bm25 import BM25Okapi
-import faiss
+
+logger = logging.getLogger(__name__)
 
 
 class FullIndexes(TypedDict):
@@ -85,7 +81,9 @@ def _rewrite_query(query: str) -> tuple[RewriteDetails | None, list[str], list[s
             bm25_queries = list(details.search_queries)
 
             if details.method_hints and details.project_terms:
-                combined = " ".join(details.project_terms[:2] + details.method_hints[:2])
+                combined = " ".join(
+                    details.project_terms[:2] + details.method_hints[:2]
+                )
                 if combined not in bm25_queries:
                     bm25_queries.append(combined)
 
@@ -96,16 +94,16 @@ def _rewrite_query(query: str) -> tuple[RewriteDetails | None, list[str], list[s
             return details, bm25_queries, keywords
 
     except Exception as e:
-        print(f"[Rewriter] LLM rewrite error: {e}", flush=True)
+        logger.info(f"Rewriter: LLM rewrite error: {e}")
 
     return None, [query], _extract_keywords(query)
 
 
 def _extract_keywords(query: str) -> list[str]:
-    words = re.split(r'[\s,;]+', query)
+    words = re.split(r"[\s,;]+", query)
     keywords = []
     for w in words:
-        w = w.strip().strip('"\'()[]{}')
+        w = w.strip().strip("\"'()[]{}")
         if w and len(w) > 1:
             keywords.append(w)
     return keywords[:10]
@@ -123,7 +121,7 @@ def _rrf_fusion(
         scores = bm25.get_scores(tokens)
         ranked_indices = np.argsort(scores)[::-1]
 
-        for rank, idx in enumerate(ranked_indices[:top_n * 3]):
+        for rank, idx in enumerate(ranked_indices[: top_n * 3]):
             idx = int(idx)
             if scores[idx] <= 0:
                 break
@@ -156,15 +154,14 @@ class HybridRetriever:
         rewrite_details, bm25_queries, keywords = _rewrite_query(query)
 
         if rewrite_details:
-            print(
-                f"[Search] Original: {query!r} → "
+            logger.info(
+                f"Search: Original: {query!r} → "
                 f"Queries: {rewrite_details.search_queries}, "
                 f"Methods: {rewrite_details.method_hints}, "
                 f"Terms: {rewrite_details.project_terms}",
-                flush=True,
             )
         else:
-            print(f"[Search] Original: {query!r} (no structured rewrite)", flush=True)
+            logger.info(f"Search: Original: {query!r} (no structured rewrite)")
 
         ranked_docs = _rrf_fusion(bm25, bm25_queries, len(chunks), settings.bm25_top_k)
 
