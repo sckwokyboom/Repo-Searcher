@@ -22,4 +22,4 @@ async def clone_repo(repo_url: str, repo_id: str) -> Path:
         pygit2.clone_repository, clone_url, str(target), depth=1
     )
 
-    return Path(repo.path)
+    return target
