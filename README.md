@@ -23,3 +23,18 @@ license: mit
 
 1. Run `docker build -t repo-searcher .`
 2. Run `docker run -p 7860:7860 repo-searcher`
+
+## Testing
+
+### Indexing
+
+1. On main page input repository URL to the search bar.
+2. From the dropdown, select desired repository.
+3. Indexing process will start.
+4. On indexing completion, new search bar will appear.
+5. Search for desired code snippet.
+
+### Searching
+
+1. On main page select desired indexed repository under the search bar.
+2. Search for desired code snippet.
