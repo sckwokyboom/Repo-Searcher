@@ -1,6 +1,5 @@
-"""Pluggable retriever implementations for benchmarking."""
-
 import re
+import re as re_mod
 import sys
 import time
 from abc import ABC, abstractmethod
@@ -9,16 +8,25 @@ from pathlib import Path
 
 import numpy as np
 
-# Ensure backend is importable
 sys.path.insert(0, str(Path(__file__).parent.parent / "backend"))
 
+import faiss
 import networkx as nx
+import torch
+from transformers import AutoModel, AutoTokenizer
 
-from app.config import settings
-from app.indexer.bm25_builder import tokenize
-from app.indexer.store import load_bm25, load_chunks, load_faiss, load_call_graph
-from app.ml.model_manager import get_model_manager
-from app.models.search import CodeChunk
+from backend.app.config import settings
+from backend.app.indexer.bm25_builder import tokenize
+from backend.app.indexer.store import (
+    load_bm25,
+    load_call_graph,
+    load_chunks,
+    load_faiss,
+)
+from backend.app.ml.model_manager import get_model_manager
+from backend.app.models.search import CodeChunk
+from backend.app.search.hybrid_retriever import HybridRetriever
+from backend.app.search.reranker import rerank
 
 
 class BaseRetriever(ABC):
@@ -57,11 +65,11 @@ class BaseRetriever(ABC):
 
     @abstractmethod
     def retrieve(self, query: str, top_k: int = 20) -> list[tuple[CodeChunk, float]]:
-        """Return top-K (chunk, score) pairs."""
-        ...
+        pass
 
-    def retrieve_timed(self, query: str, top_k: int = 20) -> tuple[list[tuple[CodeChunk, float]], float]:
-        """Return results + elapsed time in seconds."""
+    def retrieve_timed(
+        self, query: str, top_k: int = 20
+    ) -> tuple[list[tuple[CodeChunk, float]], float]:
         start = time.time()
         results = self.retrieve(query, top_k)
         elapsed = time.time() - start
@@ -77,7 +85,11 @@ class BM25Only(BaseRetriever):
             return []
         scores = self.bm25.get_scores(tokenized_query)
         top_indices = np.argsort(scores)[::-1][:top_k]
-        return [(self.chunks[int(i)], float(scores[i])) for i in top_indices if scores[i] > 0]
+        return [
+            (self.chunks[int(i)], float(scores[i]))
+            for i in top_indices
+            if scores[i] > 0
+        ]
 
 
 class VectorOnly(BaseRetriever):
@@ -99,18 +111,23 @@ class HybridRRF(BaseRetriever):
     name = "HybridRRF"
 
     def retrieve(self, query: str, top_k: int = 20) -> list[tuple[CodeChunk, float]]:
-        # BM25
         tokenized_query = tokenize(query)
-        bm25_scores = self.bm25.get_scores(tokenized_query) if tokenized_query else np.array([])
-        bm25_top = np.argsort(bm25_scores)[::-1][:settings.bm25_top_k] if len(bm25_scores) > 0 else []
+        bm25_scores = (
+            self.bm25.get_scores(tokenized_query) if tokenized_query else np.array([])
+        )
+        bm25_top = (
+            np.argsort(bm25_scores)[::-1][: settings.bm25_top_k]
+            if len(bm25_scores) > 0
+            else []
+        )
 
-        # FAISS
         manager = get_model_manager()
         query_vec = manager.encode_query(query)
         query_vec = query_vec / np.linalg.norm(query_vec, axis=1, keepdims=True)
-        distances, faiss_indices = self.faiss_index.search(query_vec.astype("float32"), settings.faiss_top_k)
+        distances, faiss_indices = self.faiss_index.search(
+            query_vec.astype("float32"), settings.faiss_top_k
+        )
 
-        # RRF fusion
         rrf_scores: dict[int, float] = defaultdict(float)
         for rank, idx in enumerate(bm25_top):
             rrf_scores[int(idx)] += 1.0 / (settings.rrf_k + rank + 1)
@@ -118,7 +135,9 @@ class HybridRRF(BaseRetriever):
             if idx >= 0:
                 rrf_scores[int(idx)] += 1.0 / (settings.rrf_k + rank + 1)
 
-        sorted_candidates = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
+        sorted_candidates = sorted(
+            rrf_scores.items(), key=lambda x: x[1], reverse=True
+        )[:top_k]
         return [(self.chunks[idx], score) for idx, score in sorted_candidates]
 
 
@@ -126,9 +145,7 @@ class HybridRRFRerank(BaseRetriever):
     name = "HybridRRF+Rerank"
 
     def retrieve(self, query: str, top_k: int = 20) -> list[tuple[CodeChunk, float]]:
-        from app.search.reranker import rerank
 
-        # Get RRF candidates (more than needed for reranking)
         rrf = HybridRRF(self.repo_id)
         rrf._chunks = self._chunks
         rrf._bm25 = self._bm25
@@ -136,9 +153,7 @@ class HybridRRFRerank(BaseRetriever):
         rrf._faiss = self._faiss
         candidates = rrf.retrieve(query, top_k=max(top_k, settings.rrf_top_k))
 
-        # Rerank top candidates
-        reranked = rerank(query, candidates[:settings.rrf_top_k])
-        # Append remaining candidates after reranked ones
+        reranked = rerank(query, candidates[: settings.rrf_top_k])
         reranked_ids = {c.chunk_id for c, _ in reranked}
         remaining = [(c, s) for c, s in candidates if c.chunk_id not in reranked_ids]
         return (reranked + remaining)[:top_k]
@@ -148,7 +163,6 @@ class FullPipeline(BaseRetriever):
     name = "FullPipeline"
 
     def retrieve(self, query: str, top_k: int = 20) -> list[tuple[CodeChunk, float]]:
-        from app.search.hybrid_retriever import HybridRetriever
 
         retriever = HybridRetriever(self.repo_id)
         result = retriever.search_sync(query, top_k=top_k)
@@ -156,43 +170,45 @@ class FullPipeline(BaseRetriever):
 
 
 class WeightedFusion(BaseRetriever):
-    """Weighted normalized score fusion: BM25-dominant since it outperforms vector."""
     name = "WeightedFusion"
     bm25_weight = 0.7
     vector_weight = 0.3
 
     def retrieve(self, query: str, top_k: int = 20) -> list[tuple[CodeChunk, float]]:
-        # BM25 scores
         tokenized_query = tokenize(query)
-        bm25_scores = self.bm25.get_scores(tokenized_query) if tokenized_query else np.zeros(len(self.chunks))
+        bm25_scores = (
+            self.bm25.get_scores(tokenized_query)
+            if tokenized_query
+            else np.zeros(len(self.chunks))
+        )
 
-        # Normalize BM25 scores to [0, 1]
         bm25_max = bm25_scores.max() if bm25_scores.max() > 0 else 1.0
         bm25_norm = bm25_scores / bm25_max
 
-        # FAISS scores
         manager = get_model_manager()
         query_vec = manager.encode_query(query)
         query_vec = query_vec / np.linalg.norm(query_vec, axis=1, keepdims=True)
         n_chunks = min(len(self.chunks), self.faiss_index.ntotal)
-        # Retrieve all-ish scores for proper normalization
         fetch_k = min(n_chunks, max(top_k * 5, 200))
-        distances, indices = self.faiss_index.search(query_vec.astype("float32"), fetch_k)
+        distances, indices = self.faiss_index.search(
+            query_vec.astype("float32"), fetch_k
+        )
 
-        # Build vector score array
         vector_scores = np.zeros(len(self.chunks))
         for dist, idx in zip(distances[0], indices[0]):
             if idx >= 0:
                 vector_scores[int(idx)] = float(dist)
 
-        # Combine
         combined = self.bm25_weight * bm25_norm + self.vector_weight * vector_scores
         top_indices = np.argsort(combined)[::-1][:top_k]
-        return [(self.chunks[int(i)], float(combined[i])) for i in top_indices if combined[i] > 0]
+        return [
+            (self.chunks[int(i)], float(combined[i]))
+            for i in top_indices
+            if combined[i] > 0
+        ]
 
 
 class BM25FileAgg(BaseRetriever):
-    """BM25 with file-level score aggregation: sum chunk scores per file, rank files."""
     name = "BM25+FileAgg"
 
     def retrieve(self, query: str, top_k: int = 20) -> list[tuple[CodeChunk, float]]:
@@ -201,9 +217,8 @@ class BM25FileAgg(BaseRetriever):
             return []
         scores = self.bm25.get_scores(tokenized_query)
 
-        # Aggregate scores by file path
         file_scores: dict[str, float] = defaultdict(float)
-        file_best_chunk: dict[str, tuple[int, float]] = {}  # file -> (chunk_idx, max_score)
+        file_best_chunk: dict[str, tuple[int, float]] = {}
         for i, score in enumerate(scores):
             if score > 0:
                 fp = self.chunks[i].file_path
@@ -211,8 +226,9 @@ class BM25FileAgg(BaseRetriever):
                 if fp not in file_best_chunk or score > file_best_chunk[fp][1]:
                     file_best_chunk[fp] = (i, score)
 
-        # Rank files by aggregated score, return best chunk per file
-        sorted_files = sorted(file_scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
+        sorted_files = sorted(file_scores.items(), key=lambda x: x[1], reverse=True)[
+            :top_k
+        ]
         results = []
         for fp, agg_score in sorted_files:
             chunk_idx, _ = file_best_chunk[fp]
@@ -221,24 +237,27 @@ class BM25FileAgg(BaseRetriever):
 
 
 class HybridFileAgg(BaseRetriever):
-    """Weighted BM25+Vector with file-level score aggregation."""
     name = "Hybrid+FileAgg"
     bm25_weight = 0.7
     vector_weight = 0.3
 
     def retrieve(self, query: str, top_k: int = 20) -> list[tuple[CodeChunk, float]]:
-        # BM25 scores
         tokenized_query = tokenize(query)
-        bm25_scores = self.bm25.get_scores(tokenized_query) if tokenized_query else np.zeros(len(self.chunks))
+        bm25_scores = (
+            self.bm25.get_scores(tokenized_query)
+            if tokenized_query
+            else np.zeros(len(self.chunks))
+        )
         bm25_max = bm25_scores.max() if bm25_scores.max() > 0 else 1.0
         bm25_norm = bm25_scores / bm25_max
 
-        # Vector scores
         manager = get_model_manager()
         query_vec = manager.encode_query(query)
         query_vec = query_vec / np.linalg.norm(query_vec, axis=1, keepdims=True)
         fetch_k = min(self.faiss_index.ntotal, max(top_k * 5, 200))
-        distances, indices = self.faiss_index.search(query_vec.astype("float32"), fetch_k)
+        distances, indices = self.faiss_index.search(
+            query_vec.astype("float32"), fetch_k
+        )
         vector_scores = np.zeros(len(self.chunks))
         for dist, idx in zip(distances[0], indices[0]):
             if idx >= 0:
@@ -246,7 +265,6 @@ class HybridFileAgg(BaseRetriever):
 
         combined = self.bm25_weight * bm25_norm + self.vector_weight * vector_scores
 
-        # File-level aggregation
         file_scores: dict[str, float] = defaultdict(float)
         file_best_chunk: dict[str, tuple[int, float]] = {}
         for i, score in enumerate(combined):
@@ -256,7 +274,9 @@ class HybridFileAgg(BaseRetriever):
                 if fp not in file_best_chunk or score > file_best_chunk[fp][1]:
                     file_best_chunk[fp] = (i, score)
 
-        sorted_files = sorted(file_scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
+        sorted_files = sorted(file_scores.items(), key=lambda x: x[1], reverse=True)[
+            :top_k
+        ]
         results = []
         for fp, agg_score in sorted_files:
             chunk_idx, _ = file_best_chunk[fp]
@@ -264,22 +284,20 @@ class HybridFileAgg(BaseRetriever):
         return results
 
 
-# --- Qwen3-Embedding based retrievers ---
-
 _qwen3_model = None
 _qwen3_tokenizer = None
-_qwen3_faiss_cache: dict[str, object] = {}  # repo_id -> faiss index
+_qwen3_faiss_cache: dict[str, object] = {}
 
 
 def _get_qwen3():
-    """Lazy-load Qwen3-Embedding-0.6B."""
     global _qwen3_model, _qwen3_tokenizer
     if _qwen3_model is None:
-        import torch
-        from transformers import AutoModel, AutoTokenizer
+
         model_name = "Qwen/Qwen3-Embedding-0.6B"
         print(f"[Qwen3Emb] Loading {model_name}...", flush=True)
-        _qwen3_tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+        _qwen3_tokenizer = AutoTokenizer.from_pretrained(
+            model_name, trust_remote_code=True
+        )
         _qwen3_model = AutoModel.from_pretrained(model_name, trust_remote_code=True)
         _qwen3_model.eval()
         device = "mps" if torch.backends.mps.is_available() else "cpu"
@@ -289,14 +307,15 @@ def _get_qwen3():
 
 
 def _qwen3_encode(texts: list[str], batch_size: int = 16) -> np.ndarray:
-    """Encode texts with Qwen3-Embedding-0.6B. Returns L2-normalized embeddings."""
-    import torch
+
     model, tokenizer = _get_qwen3()
     device = next(model.parameters()).device
     all_embeddings = []
     for i in range(0, len(texts), batch_size):
-        batch = texts[i:i + batch_size]
-        inputs = tokenizer(batch, padding=True, truncation=True, max_length=512, return_tensors="pt")
+        batch = texts[i : i + batch_size]
+        inputs = tokenizer(
+            batch, padding=True, truncation=True, max_length=512, return_tensors="pt"
+        )
         inputs = {k: v.to(device) for k, v in inputs.items()}
         with torch.no_grad():
             outputs = model(**inputs)
@@ -308,17 +327,20 @@ def _qwen3_encode(texts: list[str], batch_size: int = 16) -> np.ndarray:
 
 
 def _get_qwen3_faiss(repo_id: str, chunks: list) -> object:
-    """Build/cache a FAISS index with Qwen3 embeddings for a repo."""
-    import faiss
+
     if repo_id not in _qwen3_faiss_cache:
-        cache_path = Path(__file__).parent / "results" / "qwen3_faiss" / f"{repo_id}.npy"
+        cache_path = (
+            Path(__file__).parent / "results" / "qwen3_faiss" / f"{repo_id}.npy"
+        )
         cache_path.parent.mkdir(parents=True, exist_ok=True)
 
         if cache_path.exists():
             print(f"[Qwen3Emb] Loading cached embeddings for {repo_id}", flush=True)
             embeddings = np.load(str(cache_path))
         else:
-            print(f"[Qwen3Emb] Encoding {len(chunks)} chunks for {repo_id}...", flush=True)
+            print(
+                f"[Qwen3Emb] Encoding {len(chunks)} chunks for {repo_id}...", flush=True
+            )
             texts = [c.text_representation for c in chunks]
             embeddings = _qwen3_encode(texts, batch_size=16)
             np.save(str(cache_path), embeddings)
@@ -331,7 +353,6 @@ def _get_qwen3_faiss(repo_id: str, chunks: list) -> object:
 
 
 class Qwen3VectorOnly(BaseRetriever):
-    """Vector search using Qwen3-Embedding-0.6B — better NL-to-code matching."""
     name = "Qwen3Vector"
 
     def retrieve(self, query: str, top_k: int = 20) -> list[tuple[CodeChunk, float]]:
@@ -346,19 +367,20 @@ class Qwen3VectorOnly(BaseRetriever):
 
 
 class Qwen3HybridFileAgg(BaseRetriever):
-    """BM25 + Qwen3-Embedding with file-level aggregation."""
     name = "Qwen3Hybrid+FileAgg"
     bm25_weight = 0.6
     vector_weight = 0.4
 
     def retrieve(self, query: str, top_k: int = 20) -> list[tuple[CodeChunk, float]]:
-        # BM25 scores (normalized)
         tokenized_query = tokenize(query)
-        bm25_scores = self.bm25.get_scores(tokenized_query) if tokenized_query else np.zeros(len(self.chunks))
+        bm25_scores = (
+            self.bm25.get_scores(tokenized_query)
+            if tokenized_query
+            else np.zeros(len(self.chunks))
+        )
         bm25_max = bm25_scores.max() if bm25_scores.max() > 0 else 1.0
         bm25_norm = bm25_scores / bm25_max
 
-        # Qwen3 vector scores
         faiss_idx = _get_qwen3_faiss(self.repo_id, self.chunks)
         query_vec = _qwen3_encode([query])
         fetch_k = min(faiss_idx.ntotal, max(top_k * 5, 200))
@@ -370,7 +392,6 @@ class Qwen3HybridFileAgg(BaseRetriever):
 
         combined = self.bm25_weight * bm25_norm + self.vector_weight * vector_scores
 
-        # File-level aggregation
         file_scores: dict[str, float] = defaultdict(float)
         file_best_chunk: dict[str, tuple[int, float]] = {}
         for i, score in enumerate(combined):
@@ -380,15 +401,18 @@ class Qwen3HybridFileAgg(BaseRetriever):
                 if fp not in file_best_chunk or score > file_best_chunk[fp][1]:
                     file_best_chunk[fp] = (i, score)
 
-        sorted_files = sorted(file_scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
-        return [(self.chunks[file_best_chunk[fp][0]], agg_score) for fp, agg_score in sorted_files]
+        sorted_files = sorted(file_scores.items(), key=lambda x: x[1], reverse=True)[
+            :top_k
+        ]
+        return [
+            (self.chunks[file_best_chunk[fp][0]], agg_score)
+            for fp, agg_score in sorted_files
+        ]
 
 
 def _chunk_summary(chunk: CodeChunk, max_len: int = 200) -> str:
-    """Compact one-line summary of a chunk for batch scoring prompt."""
     parts = []
     if chunk.file_path:
-        # Just filename, not full path
         parts.append(chunk.file_path.rsplit("/", 1)[-1])
     if chunk.class_name:
         parts.append(chunk.class_name)
@@ -402,31 +426,30 @@ def _chunk_summary(chunk: CodeChunk, max_len: int = 200) -> str:
 
 
 class BM25LoRARerank(BaseRetriever):
-    """BM25 retrieval + LoRA-finetuned Qwen batch reranking."""
     name = "BM25+LoRA_Rerank"
 
-    LORA_PATH = str(Path(__file__).parent / "lora_training" / "output" / "scorer_lora" / "final")
+    LORA_PATH = str(
+        Path(__file__).parent / "lora_training" / "output" / "scorer_lora" / "final"
+    )
     RERANK_TOP = 30
 
     def retrieve(self, query: str, top_k: int = 20) -> list[tuple[CodeChunk, float]]:
-        from app.ml.model_manager import get_model_manager
-
-        # Get model manager (LoRA should be pre-initialized before benchmark)
         manager = get_model_manager()
 
-        # Step 1: BM25 retrieval
         tokenized_query = tokenize(query)
         if not tokenized_query:
             return []
         scores = self.bm25.get_scores(tokenized_query)
-        top_indices = np.argsort(scores)[::-1][:self.RERANK_TOP]
-        bm25_candidates = [(self.chunks[int(i)], float(scores[i]))
-                           for i in top_indices if scores[i] > 0]
+        top_indices = np.argsort(scores)[::-1][: self.RERANK_TOP]
+        bm25_candidates = [
+            (self.chunks[int(i)], float(scores[i]))
+            for i in top_indices
+            if scores[i] > 0
+        ]
 
         if not bm25_candidates:
             return []
 
-        # Step 2: Batch LLM reranking — one prompt for all candidates
         return self._batch_rerank(query, bm25_candidates, manager, top_k)
 
     def _batch_rerank(
@@ -436,9 +459,7 @@ class BM25LoRARerank(BaseRetriever):
         manager,
         top_k: int,
     ) -> list[tuple[CodeChunk, float]]:
-        import re as re_mod
 
-        # Build batch prompt with numbered candidates + few-shot examples
         lines = []
         for i, (chunk, _) in enumerate(candidates):
             lines.append(f"[{i}] {_chunk_summary(chunk)}")
@@ -460,10 +481,11 @@ class BM25LoRARerank(BaseRetriever):
         )
 
         try:
-            response = manager.generate(prompt, max_new_tokens=min(len(candidates) * 8, 300))
-            # Parse "[i] score" or "[i] score," patterns
+            response = manager.generate(
+                prompt, max_new_tokens=min(len(candidates) * 8, 300)
+            )
             score_map: dict[int, float] = {}
-            for match in re_mod.finditer(r'\[(\d+)\]\s*(\d+(?:\.\d+)?)', response):
+            for match in re_mod.finditer(r"\[(\d+)\]\s*(\d+(?:\.\d+)?)", response):
                 idx = int(match.group(1))
                 score = float(match.group(2))
                 if 0 <= idx < len(candidates):
@@ -472,14 +494,12 @@ class BM25LoRARerank(BaseRetriever):
             print(f"[LoRA Rerank] Error: {e}", flush=True)
             score_map = {}
 
-        # Build results: use LLM score if available, else BM25-normalized fallback
         bm25_max = max(s for _, s in candidates) if candidates else 1.0
         reranked = []
         for i, (chunk, bm25_score) in enumerate(candidates):
             if i in score_map:
                 reranked.append((chunk, score_map[i]))
             else:
-                # Fallback: normalize BM25 to 0-10 scale
                 reranked.append((chunk, (bm25_score / bm25_max) * 5.0))
 
         reranked.sort(key=lambda x: x[1], reverse=True)
@@ -487,13 +507,11 @@ class BM25LoRARerank(BaseRetriever):
 
 
 class BM25BaseQwenRerank(BaseRetriever):
-    """BM25 retrieval + base Qwen (no LoRA) batch reranking. Control for LoRA comparison."""
     name = "BM25+Qwen_Rerank"
 
     RERANK_TOP = 30
 
     def retrieve(self, query: str, top_k: int = 20) -> list[tuple[CodeChunk, float]]:
-        from app.ml.model_manager import get_model_manager
 
         manager = get_model_manager()
 
@@ -502,23 +520,26 @@ class BM25BaseQwenRerank(BaseRetriever):
         if not tokenized_query:
             return []
         scores = self.bm25.get_scores(tokenized_query)
-        top_indices = np.argsort(scores)[::-1][:self.RERANK_TOP]
-        bm25_candidates = [(self.chunks[int(i)], float(scores[i]))
-                           for i in top_indices if scores[i] > 0]
+        top_indices = np.argsort(scores)[::-1][: self.RERANK_TOP]
+        bm25_candidates = [
+            (self.chunks[int(i)], float(scores[i]))
+            for i in top_indices
+            if scores[i] > 0
+        ]
 
         if not bm25_candidates:
             return []
 
-        # Reuse the same batch reranking logic
         lora_ret = BM25LoRARerank.__new__(BM25LoRARerank)
         return lora_ret._batch_rerank(query, bm25_candidates, manager, top_k)
 
 
 class BM25LoRAFileAgg(BaseRetriever):
-    """BM25 + LoRA batch reranking + file-level aggregation."""
     name = "BM25+LoRA+FileAgg"
 
-    LORA_PATH = str(Path(__file__).parent / "lora_training" / "output" / "scorer_lora" / "final")
+    LORA_PATH = str(
+        Path(__file__).parent / "lora_training" / "output" / "scorer_lora" / "final"
+    )
     RERANK_TOP = 30
 
     def retrieve(self, query: str, top_k: int = 20) -> list[tuple[CodeChunk, float]]:
@@ -528,7 +549,6 @@ class BM25LoRAFileAgg(BaseRetriever):
         lora_retriever._corpus = self._corpus
         candidates = lora_retriever.retrieve(query, top_k=self.RERANK_TOP)
 
-        # File-level aggregation
         file_scores: dict[str, float] = defaultdict(float)
         file_best_chunk: dict[str, tuple[CodeChunk, float]] = {}
         for chunk, score in candidates:
@@ -537,14 +557,13 @@ class BM25LoRAFileAgg(BaseRetriever):
             if fp not in file_best_chunk or score > file_best_chunk[fp][1]:
                 file_best_chunk[fp] = (chunk, score)
 
-        sorted_files = sorted(file_scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
+        sorted_files = sorted(file_scores.items(), key=lambda x: x[1], reverse=True)[
+            :top_k
+        ]
         return [(file_best_chunk[fp][0], agg_score) for fp, agg_score in sorted_files]
 
 
-# --- Graph expansion helpers ---
-
 def _build_file_chunk_index(chunks: list[CodeChunk]) -> dict[str, list[int]]:
-    """Map file_path -> list of chunk indices belonging to that file."""
     index: dict[str, list[int]] = defaultdict(list)
     for i, chunk in enumerate(chunks):
         index[chunk.file_path].append(i)
@@ -552,7 +571,6 @@ def _build_file_chunk_index(chunks: list[CodeChunk]) -> dict[str, list[int]]:
 
 
 def _build_chunk_id_index(chunks: list[CodeChunk]) -> dict[str, int]:
-    """Map chunk_id -> index in chunks list."""
     return {chunk.chunk_id: i for i, chunk in enumerate(chunks)}
 
 
@@ -570,48 +588,49 @@ def compute_prior_score(
     candidate_chunk: CodeChunk,
     seed_file_path: str,
 ) -> float:
-    """Cheap relevance prior for graph neighbor ranking.
-
-    prior = 2.0 * identifier_overlap + 1.0 * token_overlap
-            + 0.5 * package_match - 1.0 * test_penalty
-    """
     query_tokens = set(tokenize(query))
     if not query_tokens:
         return 0.0
 
-    # identifier_overlap: query tokens vs file/class/method name tokens
-    id_text = (candidate_chunk.file_path or "") + " " + (candidate_chunk.class_name or "") + " " + (candidate_chunk.method_name or "")
+    id_text = (
+        (candidate_chunk.file_path or "")
+        + " "
+        + (candidate_chunk.class_name or "")
+        + " "
+        + (candidate_chunk.method_name or "")
+    )
     id_tokens = set(tokenize(id_text))
     union = query_tokens | id_tokens
     identifier_overlap = len(query_tokens & id_tokens) / max(1, len(union))
 
-    # token_overlap: query tokens vs synopsis tokens (first 200 chars)
     synopsis = (candidate_chunk.text_representation or "")[:200]
     synopsis_tokens = set(tokenize(synopsis))
     token_overlap = len(query_tokens & synopsis_tokens) / max(1, len(query_tokens))
 
-    # package_match: same directory
     seed_dir = seed_file_path.rsplit("/", 1)[0] if "/" in seed_file_path else ""
-    cand_dir = candidate_chunk.file_path.rsplit("/", 1)[0] if "/" in (candidate_chunk.file_path or "") else ""
+    cand_dir = (
+        candidate_chunk.file_path.rsplit("/", 1)[0]
+        if "/" in (candidate_chunk.file_path or "")
+        else ""
+    )
     package_match = 1.0 if seed_dir and cand_dir and seed_dir == cand_dir else 0.0
 
-    # test_penalty: penalize test files when query is not about tests
     test_penalty = 0.0
-    if re.search(r'(?i)(Test|Coverage|Internal|Mock|Stub)', candidate_chunk.file_path or ""):
+    if re.search(
+        r"(?i)(Test|Coverage|Internal|Mock|Stub)", candidate_chunk.file_path or ""
+    ):
         if "test" not in query.lower():
             test_penalty = 1.0
 
-    return 2.0 * identifier_overlap + 1.0 * token_overlap + 0.5 * package_match - 1.0 * test_penalty
+    return (
+        2.0 * identifier_overlap
+        + 1.0 * token_overlap
+        + 0.5 * package_match
+        - 1.0 * test_penalty
+    )
 
 
 class SafeGraphExpansionV2(BaseRetriever):
-    """BM25+FileAgg with safe graph expansion v2.
-
-    Key improvements over Mode B:
-    1. Freeze top-5 baseline positions — graph can only affect 6-10
-    2. Prior-ranked neighbors — sort by cheap relevance prior
-    3. Weaker graph score with safety discount
-    """
     name = "BM25+SafeGraphV2"
 
     FREEZE_K = 5
@@ -634,8 +653,9 @@ class SafeGraphExpansionV2(BaseRetriever):
             self._call_graph = _get_call_graph(self.repo_id)
         return self._call_graph
 
-    def _get_graph_neighbors(self, chunk_id: str, graph: nx.DiGraph) -> list[tuple[str, str]]:
-        """Get neighbor chunk_ids based on edge direction. Returns (neighbor_id, direction)."""
+    def _get_graph_neighbors(
+        self, chunk_id: str, graph: nx.DiGraph
+    ) -> list[tuple[str, str]]:
         neighbors = []
         if self.EDGE_DIRECTION in ("outgoing", "both"):
             for nid in graph.successors(chunk_id):
@@ -650,7 +670,9 @@ class SafeGraphExpansionV2(BaseRetriever):
         return results
 
     def retrieve_with_diagnostics(
-        self, query: str, top_k: int = 10,
+        self,
+        query: str,
+        top_k: int = 10,
     ) -> tuple[list[tuple[CodeChunk, float]], dict]:
         diagnostics = {
             "baseline_top10": [],
@@ -666,28 +688,34 @@ class SafeGraphExpansionV2(BaseRetriever):
 
         bm25_scores = self.bm25.get_scores(tokenized_query)
 
-        # File-level aggregation
         file_agg: dict[str, float] = defaultdict(float)
         file_best_chunk: dict[str, int] = {}
         for i, score in enumerate(bm25_scores):
             if score > 0:
                 fp = self.chunks[i].file_path
                 file_agg[fp] += score
-                if fp not in file_best_chunk or score > bm25_scores[file_best_chunk[fp]]:
+                if (
+                    fp not in file_best_chunk
+                    or score > bm25_scores[file_best_chunk[fp]]
+                ):
                     file_best_chunk[fp] = i
 
         if not file_agg:
             return [], diagnostics
 
         max_file_score = max(file_agg.values())
-        baseline_norm: dict[str, float] = {fp: s / max_file_score for fp, s in file_agg.items()}
+        baseline_norm: dict[str, float] = {
+            fp: s / max_file_score for fp, s in file_agg.items()
+        }
 
-        baseline_ranked = sorted(baseline_norm.items(), key=lambda x: x[1], reverse=True)
+        baseline_ranked = sorted(
+            baseline_norm.items(), key=lambda x: x[1], reverse=True
+        )
 
         # Freeze top-5
-        frozen_top5 = baseline_ranked[:self.FREEZE_K]
+        frozen_top5 = baseline_ranked[: self.FREEZE_K]
         frozen_fps = {fp for fp, _ in frozen_top5}
-        seed_files = baseline_ranked[:self.SEED_K]
+        seed_files = baseline_ranked[: self.SEED_K]
 
         diagnostics["baseline_top10"] = [(fp, sc) for fp, sc in baseline_ranked[:10]]
         diagnostics["frozen_top5"] = [(fp, sc) for fp, sc in frozen_top5]
@@ -698,7 +726,6 @@ class SafeGraphExpansionV2(BaseRetriever):
         try:
             graph = self.call_graph
         except Exception:
-            # No call graph — fall back to baseline
             results = []
             for fp, score in baseline_ranked[:top_k]:
                 ci = file_best_chunk.get(fp)
@@ -706,8 +733,9 @@ class SafeGraphExpansionV2(BaseRetriever):
                     results.append((self.chunks[ci], score))
             return results, diagnostics
 
-        # Collect raw graph neighbors per seed
-        raw_neighbors: list[dict] = []  # {seed_fp, candidate_fp, candidate_chunk, direction, seed_norm}
+        raw_neighbors: list[
+            dict
+        ] = []  # {seed_fp, candidate_fp, candidate_chunk, direction, seed_norm}
         for seed_fp, seed_norm_score in seed_files:
             neighbor_count = 0
             seen_fps_this_seed: set[str] = set()
@@ -731,22 +759,27 @@ class SafeGraphExpansionV2(BaseRetriever):
                     if nfp in seen_fps_this_seed:
                         continue
                     seen_fps_this_seed.add(nfp)
-                    raw_neighbors.append({
-                        "seed_fp": seed_fp,
-                        "seed_norm": seed_norm_score,
-                        "candidate_fp": nfp,
-                        "candidate_chunk": self.chunks[ni],
-                        "direction": direction,
-                    })
+                    raw_neighbors.append(
+                        {
+                            "seed_fp": seed_fp,
+                            "seed_norm": seed_norm_score,
+                            "candidate_fp": nfp,
+                            "candidate_chunk": self.chunks[ni],
+                            "direction": direction,
+                        }
+                    )
                     neighbor_count += 1
 
         diagnostics["raw_neighbors"] = [
-            {"seed": n["seed_fp"], "candidate": n["candidate_fp"], "direction": n["direction"]}
+            {
+                "seed": n["seed_fp"],
+                "candidate": n["candidate_fp"],
+                "direction": n["direction"],
+            }
             for n in raw_neighbors
         ]
 
-        # Compute prior scores and deduplicate at file level (keep best)
-        candidate_map: dict[str, dict] = {}  # fp -> best neighbor entry with prior
+        candidate_map: dict[str, dict] = {}
         for n in raw_neighbors:
             prior = compute_prior_score(query, n["candidate_chunk"], n["seed_fp"])
             n["prior_score"] = prior
@@ -754,16 +787,21 @@ class SafeGraphExpansionV2(BaseRetriever):
             if fp not in candidate_map or prior > candidate_map[fp]["prior_score"]:
                 candidate_map[fp] = n
 
-        # Sort by prior, take top-N
-        sorted_candidates = sorted(candidate_map.values(), key=lambda x: x["prior_score"], reverse=True)
-        filtered = sorted_candidates[:self.PRIOR_TOP_N]
+        sorted_candidates = sorted(
+            candidate_map.values(), key=lambda x: x["prior_score"], reverse=True
+        )
+        filtered = sorted_candidates[: self.PRIOR_TOP_N]
 
         diagnostics["filtered_neighbors"] = [
-            {"candidate": c["candidate_fp"], "prior": c["prior_score"], "seed": c["seed_fp"], "direction": c["direction"]}
+            {
+                "candidate": c["candidate_fp"],
+                "prior": c["prior_score"],
+                "seed": c["seed_fp"],
+                "direction": c["direction"],
+            }
             for c in filtered
         ]
 
-        # Compute graph scores
         max_prior = max((c["prior_score"] for c in filtered), default=1.0)
         if max_prior <= 0:
             max_prior = 1.0
@@ -779,7 +817,6 @@ class SafeGraphExpansionV2(BaseRetriever):
             {"candidate": fp, "graph_score": gs} for fp, gs in graph_scores.items()
         ]
 
-        # Merge for positions outside frozen top-5
         remaining_scores: dict[str, float] = {}
         for fp, bl in baseline_norm.items():
             if fp in frozen_fps:
@@ -787,15 +824,15 @@ class SafeGraphExpansionV2(BaseRetriever):
             gs = graph_scores.get(fp, 0.0)
             remaining_scores[fp] = bl + self.ADDITIVE_ALPHA * gs
 
-        # Add graph-only candidates
         for fp, gs in graph_scores.items():
             if fp not in remaining_scores and fp not in frozen_fps:
                 remaining_scores[fp] = gs
 
-        remaining_ranked = sorted(remaining_scores.items(), key=lambda x: x[1], reverse=True)
+        remaining_ranked = sorted(
+            remaining_scores.items(), key=lambda x: x[1], reverse=True
+        )
         slots_left = top_k - len(frozen_top5)
 
-        # Build result: frozen top-5 + best remaining
         results = []
         for fp, score in frozen_top5:
             ci = file_best_chunk.get(fp)
@@ -815,19 +852,12 @@ class SafeGraphExpansionV2(BaseRetriever):
 
 
 class BM25GraphExpansion(BaseRetriever):
-    """BM25+FileAgg baseline then 1-hop graph expansion from top seed files (Mode B).
-
-    Graph neighbors get score = seed_score * EDGE_WEIGHT.
-    Files in both baseline and graph get a boost: final = baseline + BOOST * graph.
-    Files only in graph get their graph score.
-    All files re-ranked by final score.
-    """
     name = "BM25+GraphExpand"
 
     SEED_K = 5
-    NEIGHBORS_PER_SEED = 5  # max neighbor files per seed
-    EDGE_WEIGHT = 1.0       # method call = strongest edge
-    BOOST = 0.2             # additive boost for files in both baseline and graph
+    NEIGHBORS_PER_SEED = 5
+    EDGE_WEIGHT = 1.0
+    BOOST = 0.2
     HUB_DEGREE_LIMIT = 50
 
     def __init__(self, repo_id: str):
@@ -841,36 +871,38 @@ class BM25GraphExpansion(BaseRetriever):
         return self._call_graph
 
     def retrieve(self, query: str, top_k: int = 10) -> list[tuple[CodeChunk, float]]:
-        # Step 1: BM25FileAgg — get ALL file scores (not just top-k)
         tokenized_query = tokenize(query)
         if not tokenized_query:
             return []
         bm25_scores = self.bm25.get_scores(tokenized_query)
 
-        # File-level aggregation
         file_agg: dict[str, float] = defaultdict(float)
         file_best_chunk: dict[str, int] = {}
         for i, score in enumerate(bm25_scores):
             if score > 0:
                 fp = self.chunks[i].file_path
                 file_agg[fp] += score
-                if fp not in file_best_chunk or score > bm25_scores[file_best_chunk[fp]]:
+                if (
+                    fp not in file_best_chunk
+                    or score > bm25_scores[file_best_chunk[fp]]
+                ):
                     file_best_chunk[fp] = i
 
-        # Normalize file scores to [0, 1] for fair comparison
         max_file_score = max(file_agg.values()) if file_agg else 1.0
-        baseline_norm: dict[str, float] = {fp: s / max_file_score for fp, s in file_agg.items()}
+        baseline_norm: dict[str, float] = {
+            fp: s / max_file_score for fp, s in file_agg.items()
+        }
 
-        # Baseline ranking
-        baseline_ranked = sorted(baseline_norm.items(), key=lambda x: x[1], reverse=True)
-        seed_files = baseline_ranked[:self.SEED_K]
+        baseline_ranked = sorted(
+            baseline_norm.items(), key=lambda x: x[1], reverse=True
+        )
+        seed_files = baseline_ranked[: self.SEED_K]
 
         file_chunk_idx = _build_file_chunk_index(self.chunks)
         chunk_id_idx = _build_chunk_id_index(self.chunks)
         graph = self.call_graph
 
-        # Step 2: Expand — collect graph neighbor scores
-        graph_scores: dict[str, float] = {}  # fp -> best graph score (normalized)
+        graph_scores: dict[str, float] = {}
         for seed_fp, seed_norm_score in seed_files:
             neighbor_count = 0
             for ci in file_chunk_idx.get(seed_fp, []):
@@ -879,7 +911,9 @@ class BM25GraphExpansion(BaseRetriever):
                     continue
                 if graph.degree(chunk_id) > self.HUB_DEGREE_LIMIT:
                     continue
-                for nid in list(graph.predecessors(chunk_id)) + list(graph.successors(chunk_id)):
+                for nid in list(graph.predecessors(chunk_id)) + list(
+                    graph.successors(chunk_id)
+                ):
                     ni = chunk_id_idx.get(nid)
                     if ni is None:
                         continue
@@ -893,7 +927,6 @@ class BM25GraphExpansion(BaseRetriever):
                 if neighbor_count >= self.NEIGHBORS_PER_SEED:
                     break
 
-        # Step 3: Merge scores
         final_scores: dict[str, float] = {}
         all_fps = set(baseline_norm.keys()) | set(graph_scores.keys())
         for fp in all_fps:
@@ -906,8 +939,9 @@ class BM25GraphExpansion(BaseRetriever):
             else:
                 final_scores[fp] = gs
 
-        # Step 4: Rank and return
-        sorted_files = sorted(final_scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
+        sorted_files = sorted(final_scores.items(), key=lambda x: x[1], reverse=True)[
+            :top_k
+        ]
         results = []
         for fp, score in sorted_files:
             ci = file_best_chunk.get(fp)
@@ -921,19 +955,11 @@ class BM25GraphExpansion(BaseRetriever):
 
 
 class BM25PrioritizedExpansion(BaseRetriever):
-    """BM25+FileAgg with prioritized graph expansion (Mode C).
-
-    Like Mode B but:
-    - Budget-limited: max MAX_TOTAL_EXPANDED new files
-    - Seeds processed in score order (best first)
-    - Graph neighbors scored by combining their own BM25 signal with graph
-      proximity: score = neighbor_bm25_norm + GRAPH_BONUS * seed_norm
-    """
     name = "BM25+PriorExpand"
 
     SEED_K = 5
     MAX_TOTAL_EXPANDED = 15
-    GRAPH_BONUS = 0.3      # bonus from graph proximity
+    GRAPH_BONUS = 0.3
     HUB_DEGREE_LIMIT = 50
 
     def __init__(self, repo_id: str):
@@ -952,28 +978,33 @@ class BM25PrioritizedExpansion(BaseRetriever):
             return []
         bm25_scores = self.bm25.get_scores(tokenized_query)
 
-        # File-level aggregation
         file_agg: dict[str, float] = defaultdict(float)
         file_best_chunk: dict[str, int] = {}
         for i, score in enumerate(bm25_scores):
             if score > 0:
                 fp = self.chunks[i].file_path
                 file_agg[fp] += score
-                if fp not in file_best_chunk or score > bm25_scores[file_best_chunk[fp]]:
+                if (
+                    fp not in file_best_chunk
+                    or score > bm25_scores[file_best_chunk[fp]]
+                ):
                     file_best_chunk[fp] = i
 
         max_file_score = max(file_agg.values()) if file_agg else 1.0
-        baseline_norm: dict[str, float] = {fp: s / max_file_score for fp, s in file_agg.items()}
+        baseline_norm: dict[str, float] = {
+            fp: s / max_file_score for fp, s in file_agg.items()
+        }
 
-        baseline_ranked = sorted(baseline_norm.items(), key=lambda x: x[1], reverse=True)
-        seed_files = baseline_ranked[:self.SEED_K]
+        baseline_ranked = sorted(
+            baseline_norm.items(), key=lambda x: x[1], reverse=True
+        )
+        seed_files = baseline_ranked[: self.SEED_K]
 
         file_chunk_idx = _build_file_chunk_index(self.chunks)
         chunk_id_idx = _build_chunk_id_index(self.chunks)
         graph = self.call_graph
 
-        # Prioritized expansion with budget
-        graph_bonus: dict[str, float] = {}  # extra score from graph proximity
+        graph_bonus: dict[str, float] = {}
         new_count = 0
 
         for seed_fp, seed_norm in seed_files:
@@ -987,7 +1018,9 @@ class BM25PrioritizedExpansion(BaseRetriever):
                     continue
                 if graph.degree(chunk_id) > self.HUB_DEGREE_LIMIT:
                     continue
-                for nid in list(graph.predecessors(chunk_id)) + list(graph.successors(chunk_id)):
+                for nid in list(graph.predecessors(chunk_id)) + list(
+                    graph.successors(chunk_id)
+                ):
                     if new_count >= self.MAX_TOTAL_EXPANDED:
                         break
                     ni = chunk_id_idx.get(nid)
@@ -1000,7 +1033,6 @@ class BM25PrioritizedExpansion(BaseRetriever):
                     if nfp not in graph_bonus or bonus > graph_bonus[nfp]:
                         graph_bonus[nfp] = bonus
 
-        # Merge: for each file, final = baseline_norm + graph_bonus
         final_scores: dict[str, float] = {}
         all_fps = set(baseline_norm.keys()) | set(graph_bonus.keys())
         for fp in all_fps:
@@ -1008,7 +1040,9 @@ class BM25PrioritizedExpansion(BaseRetriever):
             gb = graph_bonus.get(fp, 0.0)
             final_scores[fp] = bl + gb
 
-        sorted_files = sorted(final_scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
+        sorted_files = sorted(final_scores.items(), key=lambda x: x[1], reverse=True)[
+            :top_k
+        ]
         results = []
         for fp, score in sorted_files:
             ci = file_best_chunk.get(fp)
@@ -1044,5 +1078,7 @@ RETRIEVER_REGISTRY: dict[str, type[BaseRetriever]] = {
 def get_retriever(name: str, repo_id: str) -> BaseRetriever:
     cls = RETRIEVER_REGISTRY.get(name)
     if cls is None:
-        raise ValueError(f"Unknown retriever: {name}. Available: {list(RETRIEVER_REGISTRY.keys())}")
+        raise ValueError(
+            f"Unknown retriever: {name}. Available: {list(RETRIEVER_REGISTRY.keys())}"
+        )
     return cls(repo_id)

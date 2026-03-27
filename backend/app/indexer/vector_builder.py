@@ -28,7 +28,6 @@ async def build_vector_index(
 
     vectors = np.vstack(all_embeddings).astype("float32")
 
-    # L2 normalize for cosine similarity via inner product
     norms = np.linalg.norm(vectors, axis=1, keepdims=True)
     norms[norms == 0] = 1
     vectors = vectors / norms

@@ -27,16 +27,10 @@ interface GraphNode {
   vy?: number;
 }
 
-interface GraphLink {
-  source: string | GraphNode;
-  target: string | GraphNode;
-}
-
 export default function CallGraphPanel({ repoId, methodId, onClose }: Props) {
   const [data, setData] = useState<CallGraphData | null>(null);
   const [loading, setLoading] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const graphRef = useRef<any>(null);
 
   useEffect(() => {
     if (!methodId) return;
@@ -56,7 +50,7 @@ export default function CallGraphPanel({ repoId, methodId, onClose }: Props) {
       renderGraph(ForceGraph);
     });
 
-    function renderGraph(FG: any) {
+    function renderGraph(_FG: any) {
       // We'll use a canvas-based approach instead
     }
   }, [data]);

@@ -1,5 +1,3 @@
-"""Compute retrieval metrics: Recall@K, Precision@K, MRR, Hit@K."""
-
 from collections import defaultdict
 
 from benchmark.config import (
@@ -17,7 +15,6 @@ def compute_sample_metrics(
     result: RetrievalResult,
     k_values: list[int] | None = None,
 ) -> SampleMetrics:
-    """Compute all metrics for a single (sample, retriever) pair."""
     k_values = k_values or DEFAULT_TOP_K_VALUES
     gt_files = set(sample.changed_files)
     gt_methods = set(sample.changed_methods)
@@ -30,28 +27,22 @@ def compute_sample_metrics(
         repo=sample.repo,
     )
 
-    # File-level metrics
     for k in k_values:
         top_k_files = set(retrieved_files[:k])
 
-        # Recall@K: fraction of GT files found
         if gt_files:
             recall = len(gt_files & top_k_files) / len(gt_files)
         else:
             recall = 0.0
         metrics.recall_at_k[k] = recall
 
-        # Precision@K: fraction of retrieved that are relevant
         if top_k_files:
             precision = len(gt_files & top_k_files) / len(top_k_files)
         else:
             precision = 0.0
         metrics.precision_at_k[k] = precision
-
-        # Hit@K: binary
         metrics.hit_at_k[k] = 1.0 if gt_files & top_k_files else 0.0
 
-    # MRR: 1/rank of first match
     mrr = 0.0
     for rank, f in enumerate(retrieved_files, 1):
         if f in gt_files:
@@ -59,12 +50,13 @@ def compute_sample_metrics(
             break
     metrics.mrr = mrr
 
-    # Method-level metrics (if ground truth methods available)
     if gt_methods:
         for k in k_values:
             top_k_methods = set(retrieved_methods[:k])
             if gt_methods:
-                metrics.method_recall_at_k[k] = len(gt_methods & top_k_methods) / len(gt_methods)
+                metrics.method_recall_at_k[k] = len(gt_methods & top_k_methods) / len(
+                    gt_methods
+                )
             metrics.method_hit_at_k[k] = 1.0 if gt_methods & top_k_methods else 0.0
 
     return metrics
@@ -74,7 +66,6 @@ def aggregate_metrics(
     per_sample: list[SampleMetrics],
     k_values: list[int] | None = None,
 ) -> list[AggregatedMetrics]:
-    """Aggregate per-sample metrics by retriever."""
     k_values = k_values or DEFAULT_TOP_K_VALUES
 
     by_retriever: dict[str, list[SampleMetrics]] = defaultdict(list)
@@ -90,8 +81,12 @@ def aggregate_metrics(
             agg.recall_at_k[k] = sum(s.recall_at_k.get(k, 0) for s in samples) / n
             agg.precision_at_k[k] = sum(s.precision_at_k.get(k, 0) for s in samples) / n
             agg.hit_at_k[k] = sum(s.hit_at_k.get(k, 0) for s in samples) / n
-            agg.method_recall_at_k[k] = sum(s.method_recall_at_k.get(k, 0) for s in samples) / n
-            agg.method_hit_at_k[k] = sum(s.method_hit_at_k.get(k, 0) for s in samples) / n
+            agg.method_recall_at_k[k] = (
+                sum(s.method_recall_at_k.get(k, 0) for s in samples) / n
+            )
+            agg.method_hit_at_k[k] = (
+                sum(s.method_hit_at_k.get(k, 0) for s in samples) / n
+            )
 
         agg.mrr = sum(s.mrr for s in samples) / n
         aggregated.append(agg)
@@ -103,7 +98,6 @@ def aggregate_by_repo(
     per_sample: list[SampleMetrics],
     k_values: list[int] | None = None,
 ) -> dict[str, list[AggregatedMetrics]]:
-    """Aggregate metrics per repo per retriever."""
     k_values = k_values or DEFAULT_TOP_K_VALUES
 
     by_repo: dict[str, list[SampleMetrics]] = defaultdict(list)
@@ -121,10 +115,8 @@ def evaluate(
     results: list[RetrievalResult],
     k_values: list[int] | None = None,
 ) -> EvalResults:
-    """Full evaluation: compute per-sample, per-retriever, per-repo metrics."""
     k_values = k_values or DEFAULT_TOP_K_VALUES
 
-    # Build lookup: (sample_id, retriever) -> result
     result_lookup: dict[tuple[str, str], RetrievalResult] = {}
     for r in results:
         result_lookup[(r.sample_id, r.retriever)] = r

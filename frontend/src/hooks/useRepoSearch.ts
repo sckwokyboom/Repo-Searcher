@@ -6,7 +6,7 @@ export function useRepoSearch(debounceMs: number = 300) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<GitHubRepo[]>([]);
   const [loading, setLoading] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setTimeout>>();
+  const timerRef = useRef<ReturnType<typeof setTimeout>>(null);
 
   useEffect(() => {
     if (!query || query.length < 2) {

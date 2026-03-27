@@ -29,13 +29,13 @@ export default function CodeBlock({
           }}
         >
           {tokens.map((line, i) => {
-            const { key: lineKey, ...lineProps } = getLineProps({
+            const lineProps = getLineProps({
               line,
               key: i,
             });
             return (
               <Box
-                key={lineKey}
+                key={i}
                 {...lineProps}
                 sx={{ display: "flex", "&:hover": { bgcolor: "rgba(255,255,255,0.04)" } }}
               >
@@ -55,11 +55,11 @@ export default function CodeBlock({
                 </Box>
                 <span>
                   {line.map((token, key) => {
-                    const { key: tokenKey, ...tokenProps } = getTokenProps({
+                    const tokenProps = getTokenProps({
                       token,
                       key,
                     });
-                    return <span key={tokenKey} {...tokenProps} />;
+                    return <span key={key} {...tokenProps} />;
                   })}
                 </span>
               </Box>

@@ -16,10 +16,9 @@ def expand_query(query: str) -> tuple[str, list[str]]:
 
     response = manager.generate(prompt, max_new_tokens=100)
 
-    # Parse keywords
     keywords = []
-    for part in re.split(r'[,\n]+', response):
-        word = part.strip().strip('- "\'')
+    for part in re.split(r"[,\n]+", response):
+        word = part.strip().strip("- \"'")
         if word and len(word) > 1 and len(word) < 50:
             keywords.append(word)
 

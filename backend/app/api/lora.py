@@ -1,8 +1,3 @@
-"""
-LoRA adapter API — list available adapters, assign to repos,
-start training, cancel, and check status.
-"""
-
 import asyncio
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -10,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from app.api.ws import connection_manager
 from app.config import settings
 from app.indexer.store import load_chunks
 from app.ml.lora_data_generator import estimate_training_time, fast_estimate_samples
@@ -20,6 +16,7 @@ from app.ml.lora_registry import (
     list_adapters,
     unassign_adapter,
 )
+from app.ml.lora_trainer import LoRATrainer
 from app.ml.model_manager import reset_model_manager
 from app.models.repo import LoRAAdapterInfo, LoRAStatusResponse, LoRATrainingProgress
 
@@ -31,12 +28,8 @@ cancel_events: dict[str, threading.Event] = {}
 latest_lora_progress: dict[str, LoRATrainingProgress] = {}
 
 
-# --- Adapter listing ---
-
-
 @router.get("/lora/adapters", response_model=list[LoRAAdapterInfo])
 async def get_available_adapters():
-    """List all available LoRA adapters (bundled + trained)."""
     return [
         LoRAAdapterInfo(
             adapter_id=a.adapter_id,
@@ -49,36 +42,30 @@ async def get_available_adapters():
     ]
 
 
-# --- Adapter selection ---
-
-
 class SelectAdapterRequest(BaseModel):
-    adapter_id: str | None = None  # None = remove assignment (use no adapter)
+    adapter_id: str | None = None
 
 
 @router.post("/repos/{repo_id}/lora/select")
 async def select_adapter(repo_id: str, request: SelectAdapterRequest):
-    """Assign an existing adapter to a repo, or remove assignment."""
     if request.adapter_id is None:
         unassign_adapter(repo_id)
-        # Reset model manager so next search picks up the change
         reset_model_manager()
         return {"repo_id": repo_id, "status": "adapter_removed"}
 
     if not assign_adapter(repo_id, request.adapter_id):
         raise HTTPException(status_code=404, detail="Adapter not found")
 
-    # Reset model manager so next search picks up the new adapter
     reset_model_manager()
-    return {"repo_id": repo_id, "status": "adapter_assigned", "adapter_id": request.adapter_id}
-
-
-# --- Training ---
+    return {
+        "repo_id": repo_id,
+        "status": "adapter_assigned",
+        "adapter_id": request.adapter_id,
+    }
 
 
 @router.post("/repos/{repo_id}/lora/train", status_code=202)
 async def start_lora_training(repo_id: str):
-    """Start LoRA fine-tuning for a repository."""
     metadata_path = settings.indexes_dir / repo_id / "metadata.json"
     if not metadata_path.exists():
         raise HTTPException(status_code=404, detail="Repository not indexed")
@@ -86,9 +73,6 @@ async def start_lora_training(repo_id: str):
     if repo_id in active_lora_tasks and not active_lora_tasks[repo_id].done():
         raise HTTPException(status_code=409, detail="LoRA training already in progress")
 
-    # Allow re-training even if adapter exists (user might want to retrain)
-
-    # Fast estimate training time (without expensive data generation)
     chunks = load_chunks(repo_id)
     estimated_samples = fast_estimate_samples(len(chunks))
     estimated_min = estimate_training_time(
@@ -98,12 +82,8 @@ async def start_lora_training(repo_id: str):
         grad_accum=settings.lora_gradient_accumulation,
     )
 
-    # Set up cancellation and progress
     cancel_event = threading.Event()
     cancel_events[repo_id] = cancel_event
-
-    from app.api.ws import connection_manager
-    from app.ml.lora_trainer import LoRATrainer
 
     loop = asyncio.get_event_loop()
 
@@ -137,7 +117,6 @@ async def start_lora_training(repo_id: str):
 
 @router.post("/repos/{repo_id}/lora/cancel")
 async def cancel_lora_training(repo_id: str):
-    """Cancel ongoing LoRA training."""
     if repo_id not in cancel_events:
         raise HTTPException(status_code=404, detail="No active training for this repo")
 
@@ -145,18 +124,10 @@ async def cancel_lora_training(repo_id: str):
     return {"repo_id": repo_id, "status": "cancelling"}
 
 
-# --- Status ---
-
-
 @router.get("/repos/{repo_id}/lora/status", response_model=LoRAStatusResponse)
 async def get_lora_status(repo_id: str):
-    """Get LoRA adapter status for a repository."""
-    is_training = (
-        repo_id in active_lora_tasks
-        and not active_lora_tasks[repo_id].done()
-    )
+    is_training = repo_id in active_lora_tasks and not active_lora_tasks[repo_id].done()
 
-    # Fast estimate time if no adapter and not training
     estimated_min = None
     if not has_adapter(repo_id) and not is_training:
         metadata_path = settings.indexes_dir / repo_id / "metadata.json"

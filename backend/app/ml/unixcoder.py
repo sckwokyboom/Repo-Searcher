@@ -9,12 +9,12 @@ class UniXcoderWrapper:
     def __init__(self, device: str = "cpu"):
         self.device = device
         self.tokenizer = AutoTokenizer.from_pretrained(settings.unixcoder_model)
-        self.model = AutoModel.from_pretrained(settings.unixcoder_model).to(device)
+        self.model: torch.nn.Module = AutoModel.from_pretrained(settings.unixcoder_model).to(device)
         self.model.eval()
 
     @torch.no_grad()
     def encode(self, texts: list[str], max_length: int = 512) -> np.ndarray:
-        inputs = self.tokenizer(
+        inputs: dict = self.tokenizer(
             texts,
             padding=True,
             truncation=True,
@@ -23,6 +23,5 @@ class UniXcoderWrapper:
         ).to(self.device)
 
         outputs = self.model(**inputs)
-        # Use CLS token embedding
         embeddings = outputs.last_hidden_state[:, 0, :]
         return embeddings.cpu().numpy()

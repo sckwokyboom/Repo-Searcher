@@ -3,6 +3,8 @@ import pickle
 from pathlib import Path
 
 import networkx as nx
+import numpy as np
+from rank_bm25 import BM25Okapi
 
 from app.config import settings
 from app.models.repo import RepoInfo
@@ -12,26 +14,22 @@ from app.models.search import CodeChunk
 def save_indexes(
     repo: RepoInfo,
     chunks: list[CodeChunk],
-    bm25_index,
+    bm25_index: BM25Okapi,
     tokenized_corpus: list[list[str]],
     call_graph: nx.DiGraph,
 ):
     index_dir = settings.indexes_dir / repo.repo_id
     index_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save chunks
     with open(index_dir / "chunks.json", "w") as f:
         json.dump([c.model_dump() for c in chunks], f)
 
-    # Save BM25
     with open(index_dir / "bm25.pkl", "wb") as f:
         pickle.dump({"bm25": bm25_index, "corpus": tokenized_corpus}, f)
 
-    # Save Call Graph
     with open(index_dir / "callgraph.pkl", "wb") as f:
         pickle.dump(call_graph, f)
 
-    # Save metadata
     metadata = {
         "repo_info": repo.model_dump(mode="json"),
         "chunk_count": len(chunks),
@@ -47,7 +45,7 @@ def load_chunks(repo_id: str) -> list[CodeChunk]:
     return [CodeChunk(**c) for c in data]
 
 
-def load_bm25(repo_id: str):
+def load_bm25(repo_id: str) -> tuple[BM25Okapi, list[list[str]]]:
     path = settings.indexes_dir / repo_id / "bm25.pkl"
     with open(path, "rb") as f:
         data = pickle.load(f)
