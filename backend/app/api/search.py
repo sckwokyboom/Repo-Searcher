@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 
 from app.config import settings
 from app.models.search import SearchRequest, SearchResponse
+from app.search.hybrid_retriever import HybridRetriever
 
 router = APIRouter(tags=["search"])
 
@@ -17,8 +18,6 @@ async def search_code(repo_id: str, request: SearchRequest):
     metadata_path = settings.indexes_dir / repo_id / "metadata.json"
     if not metadata_path.exists():
         raise HTTPException(status_code=404, detail="Repository not indexed")
-
-    from app.search.hybrid_retriever import HybridRetriever
 
     start = time.time()
 

@@ -8,7 +8,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "backend"))
 
+import torch
+from datasets import Dataset
+from peft import LoraConfig, TaskType, get_peft_model
 from sklearn.metrics import roc_auc_score
+from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
+from trl.trainer.sft_trainer import SFTTrainer
 
 from backend.app.config import settings
 from backend.app.indexer.store import load_chunks
@@ -551,9 +556,6 @@ def run_e4_llm_probe(
     print("E4: LLM Probe (Qwen2.5-Coder logits)")
     print("=" * 60)
 
-    import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-
     query_candidates = defaultdict(list)
     for c in candidates:
         query_candidates[c["sample_id"]].append(c)
@@ -780,12 +782,6 @@ def run_e5_smoke_lora(
     print("\n" + "=" * 60)
     print("E5: Smoke LoRA")
     print("=" * 60)
-
-    import torch
-    from datasets import Dataset
-    from peft import LoraConfig, TaskType, get_peft_model
-    from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
-    from trl import SFTTrainer
 
     train_samples = []
     for c in candidates:

@@ -6,7 +6,7 @@ import torch
 from datasets import Dataset
 from peft import LoraConfig, TaskType, get_peft_model
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
-from trl import SFTTrainer
+from trl.trainer.sft_trainer import SFTTrainer
 
 DATA_DIR = Path(__file__).parent / "data"
 BASE_MODEL = "Qwen/Qwen2.5-Coder-1.5B"

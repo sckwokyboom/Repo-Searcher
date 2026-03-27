@@ -24,8 +24,8 @@ from benchmark.retrievers import (
     _build_chunk_id_index,
     _get_call_graph,
 )
-from app.config import settings
-from app.indexer.store import load_chunks
+from backend.app.config import settings
+from backend.app.indexer.store import load_chunks
 
 EXPERIMENT_DIR = Path(__file__).parent / "results" / "graph_expansion"
 N_SAMPLES = 75

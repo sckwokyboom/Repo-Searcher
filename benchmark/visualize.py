@@ -1,16 +1,14 @@
+from datetime import datetime
 from pathlib import Path
 
-from datetime import datetime
+import matplotlib
+import matplotlib.pyplot as plt
+import numpy as np
 from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from benchmark.config import AggregatedMetrics, EvalResults, PLOTS_DIR, RESULTS_DIR
-import matplotlib
-import matplotlib.pyplot as plt
-from rich.console import Console
-from rich.table import Table
-
+from benchmark.config import PLOTS_DIR, RESULTS_DIR, AggregatedMetrics, EvalResults
 
 matplotlib.use("Agg")
 
@@ -146,7 +144,6 @@ def plot_results(eval_results: EvalResults, output_dir: Path | None = None):
         "Hit@5": [agg.hit_at_k.get(5, 0) for agg in eval_results.per_retriever],
     }
 
-    import numpy as np
 
     x = np.arange(len(metrics))
     width = 0.8 / len(retrievers)

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import shutil
 from pathlib import Path
 
 import httpx
@@ -117,7 +118,6 @@ async def get_repo_status(repo_id: str):
 
 @router.delete("/repos/{repo_id}")
 async def delete_repo_index(repo_id: str):
-    import shutil
 
     index_dir = settings.indexes_dir / repo_id
     if index_dir.exists():

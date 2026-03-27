@@ -9,6 +9,8 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "backend"))
 
+import random
+
 from backend.app.indexer.bm25_builder import tokenize
 from backend.app.indexer.store import load_bm25, load_chunks
 from benchmark.query_cleaner import clean_query
@@ -212,7 +214,6 @@ def main():
         samples = generate_training_samples(repo_id, commits)
         all_samples.extend(samples)
 
-    import random
 
     random.seed(42)
     random.shuffle(all_samples)

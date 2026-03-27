@@ -1,3 +1,4 @@
+import gc
 import json
 import logging
 import threading
@@ -307,7 +308,6 @@ class LoRATrainer:
         del trainer
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        import gc
 
         gc.collect()
 

@@ -83,7 +83,6 @@ class IndexingOrchestrator:
             await self._emit(IndexingStep.BUILDING_BM25, 1.0, "BM25 index built")
 
             await self._emit(IndexingStep.BUILDING_CALLGRAPH, 0.0, "Building call graph...")
-            from app.indexer.callgraph_builder import build_call_graph
 
             call_graph = build_call_graph(chunks, repo_path)
             await self._emit(

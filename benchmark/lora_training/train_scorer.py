@@ -10,7 +10,7 @@ from transformers import (
     AutoTokenizer,
     TrainingArguments,
 )
-from trl import SFTTrainer
+from trl.trainer.sft_trainer import SFTTrainer
 
 DATA_DIR = Path(__file__).parent / "data"
 OUTPUT_DIR = Path(__file__).parent / "output" / "scorer_lora"

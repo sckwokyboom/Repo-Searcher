@@ -1,4 +1,5 @@
 import re
+import re as re_mod
 import sys
 import time
 from abc import ABC, abstractmethod
@@ -9,20 +10,23 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "backend"))
 
+import faiss
 import networkx as nx
+import torch
+from transformers import AutoModel, AutoTokenizer
 
 from backend.app.config import settings
 from backend.app.indexer.bm25_builder import tokenize
 from backend.app.indexer.store import (
     load_bm25,
+    load_call_graph,
     load_chunks,
     load_faiss,
-    load_call_graph,
 )
 from backend.app.ml.model_manager import get_model_manager
 from backend.app.models.search import CodeChunk
-from backend.app.search.reranker import rerank
 from backend.app.search.hybrid_retriever import HybridRetriever
+from backend.app.search.reranker import rerank
 
 
 class BaseRetriever(ABC):
@@ -288,8 +292,6 @@ _qwen3_faiss_cache: dict[str, object] = {}
 def _get_qwen3():
     global _qwen3_model, _qwen3_tokenizer
     if _qwen3_model is None:
-        import torch
-        from transformers import AutoModel, AutoTokenizer
 
         model_name = "Qwen/Qwen3-Embedding-0.6B"
         print(f"[Qwen3Emb] Loading {model_name}...", flush=True)
@@ -305,7 +307,6 @@ def _get_qwen3():
 
 
 def _qwen3_encode(texts: list[str], batch_size: int = 16) -> np.ndarray:
-    import torch
 
     model, tokenizer = _get_qwen3()
     device = next(model.parameters()).device
@@ -326,7 +327,6 @@ def _qwen3_encode(texts: list[str], batch_size: int = 16) -> np.ndarray:
 
 
 def _get_qwen3_faiss(repo_id: str, chunks: list) -> object:
-    import faiss
 
     if repo_id not in _qwen3_faiss_cache:
         cache_path = (
@@ -459,7 +459,6 @@ class BM25LoRARerank(BaseRetriever):
         manager,
         top_k: int,
     ) -> list[tuple[CodeChunk, float]]:
-        import re as re_mod
 
         lines = []
         for i, (chunk, _) in enumerate(candidates):
