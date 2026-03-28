@@ -11,7 +11,7 @@ RUN npm run build
 
 WORKDIR /app
 
-RUN uv sync
+RUN uv sync --extra cpu
 
 EXPOSE 7860
 

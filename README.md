@@ -36,6 +36,22 @@ and here: `benchmark/lora_training/train_scorer.py` for LLM-MCTS-scorer.
 3. Run `uv sync`
 4. Run `uv run uvicorn backend.app.main:app --host 0.0.0.0 --port 7860`
 
+### Local - cpu
+
+1. Clone repository
+2. Go to repository folder
+3. Run `uv sync --extra cpu`
+4. Run `uv run uvicorn backend.app.main:app --host 0.0.0.0 --port 7860`
+
+### Local - cuda
+
+1. Clone repository
+2. Go to repository folder
+3. Run `uv sync --extra cu130`
+4. Run `uv run uvicorn backend.app.main:app --host 0.0.0.0 --port 7860`
+
+Supported cudas: `cu130`, `cu128`, `cu126`
+
 ### Docker
 
 1. Run `docker build -t repo-searcher .`
