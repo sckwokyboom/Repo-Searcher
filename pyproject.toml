@@ -13,3 +13,9 @@ backend = { workspace = true }
 
 [tool.uv.workspace]
 members = ["backend"]
+
+[project.optional-dependencies]
+cpu = ["backend[cpu]"]
+cu126 = ["backend[cu126]"]
+cu128 = ["backend[cu128]"]
+cu130 = ["backend[cu130]"]
