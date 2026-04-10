@@ -38,6 +38,12 @@ VERSION_CONFIG = {
         "output": "rewriter_lora_v3",
         "epochs": 5,
     },
+    "v4": {
+        "train": "train_rewriter_v4.jsonl",
+        "val": "val_rewriter_v4.jsonl",
+        "output": "rewriter_lora_v4",
+        "epochs": 5,
+    },
 }
 
 

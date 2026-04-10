@@ -10,7 +10,12 @@ export function useLoRATraining(repoId: string | null) {
   const connect = useCallback(() => {
     if (!repoId) return;
 
-    const ws = new WebSocket(`${WS_BASE}/api/ws/lora/${repoId}`);
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(`${WS_BASE}/api/ws/lora/${repoId}`);
+    } catch {
+      return;
+    }
     wsRef.current = ws;
 
     ws.onopen = () => setIsConnected(true);

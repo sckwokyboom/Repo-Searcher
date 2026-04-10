@@ -10,7 +10,12 @@ export function useIndexingProgress(repoId: string | null) {
   const connect = useCallback(() => {
     if (!repoId) return;
 
-    const ws = new WebSocket(`${WS_BASE}/api/ws/indexing/${repoId}`);
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(`${WS_BASE}/api/ws/indexing/${repoId}`);
+    } catch {
+      return;
+    }
     wsRef.current = ws;
 
     ws.onopen = () => setIsConnected(true);
