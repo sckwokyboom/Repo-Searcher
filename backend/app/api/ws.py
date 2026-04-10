@@ -1,7 +1,6 @@
 from collections import defaultdict
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-
 from pydantic import BaseModel
 
 from app.models.repo import IndexingProgress

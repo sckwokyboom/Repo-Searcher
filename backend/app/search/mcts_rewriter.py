@@ -1,17 +1,4 @@
-"""
-Monte Carlo Tree Search (MCTS) for query rewriting.
-
-Iteratively rewrites a search query using LLM, evaluating each variant
-with a hybrid reward signal:
-  - BM25 keyword score (fast, lexical)
-  - FAISS cosine similarity via UniXcoder (semantic, multilingual)
-  - Qwen LLM relevance score for the top hit (deep understanding)
-
-This combination allows the MCTS to handle multilingual queries
-(e.g. Russian → Java code) because UniXcoder captures semantic
-similarity across languages and Qwen understands code context.
-"""
-
+import logging
 import math
 import re
 
@@ -22,12 +9,21 @@ from app.indexer.bm25_builder import tokenize
 from app.ml.model_manager import get_model_manager
 from app.models.search import CodeChunk
 
+logger = logging.getLogger(__name__)
+
 
 class _Node:
     __slots__ = (
-        "id", "query", "parent_id", "children_ids",
-        "visits", "total_reward", "top_hits",
-        "bm25_reward", "semantic_reward", "llm_reward",
+        "id",
+        "query",
+        "parent_id",
+        "children_ids",
+        "visits",
+        "total_reward",
+        "top_hits",
+        "bm25_reward",
+        "semantic_reward",
+        "llm_reward",
     )
 
     def __init__(self, node_id: int, query: str, parent_id: int | None = None):
@@ -38,7 +34,6 @@ class _Node:
         self.visits: int = 0
         self.total_reward: float = 0.0
         self.top_hits: list[dict] = []
-        # Decomposed reward components for visualization
         self.bm25_reward: float = 0.0
         self.semantic_reward: float = 0.0
         self.llm_reward: float = 0.0
@@ -52,20 +47,8 @@ class _Node:
 
 
 class MCTSRewriter:
-    """
-    Uses MCTS to explore query rewrites with hybrid reward.
+    C = 1.41
 
-    Reward = w_bm25 * BM25_norm + w_sem * FAISS_cosine + w_llm * LLM_score
-
-    This makes the system work for multilingual queries because:
-    - UniXcoder embeddings capture cross-lingual code semantics
-    - Qwen understands both natural language intent and code relevance
-    - BM25 handles the lexical signal when query terms overlap with code
-    """
-
-    C = 1.41  # UCB1 exploration constant
-
-    # Reward component weights
     W_BM25 = 0.25
     W_SEMANTIC = 0.50
     W_LLM = 0.25
@@ -88,13 +71,11 @@ class MCTSRewriter:
         self.nodes: list[_Node] = []
         self._manager = get_model_manager()
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     def rewrite(self, query: str) -> dict:
-        print(f"[MCTS] Starting rewrite for: {query!r}", flush=True)
-        print(f"[MCTS] Reward weights: BM25={self.W_BM25}, Semantic={self.W_SEMANTIC}, LLM={self.W_LLM}", flush=True)
+        logger.info(f"MCTS: rewriting for <{query!r}>...")
+        logger.info(
+            f"MCTS: weights: BM25={self.W_BM25}, Semantic={self.W_SEMANTIC}, LLM={self.W_LLM}"
+        )
 
         root = self._add_node(query, parent_id=None)
         root_reward, root_hits, components = self._simulate(root.query)
@@ -103,19 +84,18 @@ class MCTSRewriter:
         root.semantic_reward = components["semantic"]
         root.llm_reward = components["llm"]
         self._backpropagate(root.id, root_reward)
-        print(
-            f"[MCTS] Root: reward={root_reward:.4f} "
+        logger.info(
+            f"MCTS: root node: reward={root_reward:.3f} "
             f"(bm25={components['bm25']:.3f}, sem={components['semantic']:.3f}, llm={components['llm']:.3f}), "
             f"hits={[h['name'] for h in root_hits]}",
-            flush=True,
         )
 
         for iteration in range(self.n_iterations):
-            print(f"[MCTS] === Iteration {iteration + 1}/{self.n_iterations} ===", flush=True)
+            logger.info(f"MCTS: iteration {iteration + 1}/{self.n_iterations}")
 
             leaf = self._select(root.id)
             children = self._expand(leaf, query)
-            print(f"[MCTS]   Expanded node {leaf.id} into {len(children)} children", flush=True)
+            logger.info(f"MCTS: expanded {len(children)} children for {leaf.query!r}")
 
             for child in children:
                 reward, hits, components = self._simulate(child.query)
@@ -124,28 +104,25 @@ class MCTSRewriter:
                 child.semantic_reward = components["semantic"]
                 child.llm_reward = components["llm"]
                 self._backpropagate(child.id, reward)
-                print(
-                    f"[MCTS]   Node {child.id}: {child.query!r} -> "
-                    f"reward={reward:.4f} (bm25={components['bm25']:.3f}, "
-                    f"sem={components['semantic']:.3f}, llm={components['llm']:.3f})",
-                    flush=True,
+                logger.info(
+                    f"MCTS: node {child.id}: reward={reward:.3f} "
+                    f"(bm25={components['bm25']:.3f}, sem={components['semantic']:.3f}, llm={components['llm']:.3f}), "
+                    f"hits={[h['name'] for h in hits]}",
                 )
 
         best_leaf = self._best_leaf()
         best_path = self._path_to_root(best_leaf.id)
         keywords = self._extract_keywords(best_leaf.query)
 
-        print(f"[MCTS] Best query: {best_leaf.query!r} (avg_reward={best_leaf.avg_reward:.4f})", flush=True)
+        logger.info(f"MCTS: best leaf: {best_leaf.query!r}")
+        logger.info(f"MCTS: best path: {[n for n in best_path]}")
+        logger.info(f"MCTS: best keywords: {keywords}")
 
         return {
             "trace": self._build_trace(best_path, best_leaf.query, query),
             "best_query": best_leaf.query,
             "keywords": keywords,
         }
-
-    # ------------------------------------------------------------------
-    # MCTS phases
-    # ------------------------------------------------------------------
 
     def _select(self, node_id: int) -> _Node:
         node = self.nodes[node_id]
@@ -161,10 +138,11 @@ class MCTSRewriter:
         node = self.nodes[node_id]
         if node.visits == 0:
             return float("inf")
-        return node.avg_reward + self.C * math.sqrt(math.log(parent_visits) / node.visits)
+        return node.avg_reward + self.C * math.sqrt(
+            math.log(parent_visits) / node.visits
+        )
 
     def _expand(self, node: _Node, original_query: str) -> list[_Node]:
-        """Generate rewrite variants. Prompt is multilingual-aware."""
         prompt = (
             "You are a code search query optimizer for Java repositories. "
             "The user's query may be in any language (English, Russian, Chinese, etc). "
@@ -174,11 +152,13 @@ class MCTSRewriter:
             "- Be in English (since Java code uses English identifiers)\n"
             "- Use specific Java class names, method names, design patterns, or API terms\n"
             "- Target different aspects or synonyms of the original intent\n\n"
-            f"User's original query: \"{original_query}\"\n"
+            f'User\'s original query: "{original_query}"\n'
         )
         if node.query != original_query:
-            prompt += f"Current best rewrite: \"{node.query}\"\n"
-        prompt += f"\nProvide exactly {self.n_children} rewrites, one per line, numbered:\n"
+            prompt += f'Current best rewrite: "{node.query}"\n'
+        prompt += (
+            f"\nProvide exactly {self.n_children} rewrites, one per line, numbered:\n"
+        )
 
         response = self._manager.generate(prompt, max_new_tokens=200)
         variants = self._parse_variants(response, node.query)
@@ -190,15 +170,6 @@ class MCTSRewriter:
         return children
 
     def _simulate(self, query: str) -> tuple[float, list[dict], dict]:
-        """
-        Evaluate a query variant with hybrid reward:
-          1. BM25 keyword score
-          2. FAISS semantic similarity (UniXcoder)
-          3. Qwen LLM relevance score for top-1 hit
-
-        Returns (combined_reward, top_hits, component_scores).
-        """
-        # --- 1. BM25 ---
         bm25_reward = 0.0
         bm25_hits: list[tuple[int, float]] = []  # (chunk_idx, score)
 
@@ -216,26 +187,20 @@ class MCTSRewriter:
                     avg_bm25 = np.mean([s for _, s in bm25_hits])
                     bm25_reward = float(avg_bm25 / (avg_bm25 + 1.0))
 
-        # --- 2. Semantic (FAISS / UniXcoder) ---
         semantic_reward = 0.0
         semantic_hits: list[tuple[int, float]] = []
 
         if self.faiss_index is not None:
             query_vec = self._manager.encode_query(query)
             query_vec = query_vec / np.linalg.norm(query_vec, axis=1, keepdims=True)
-            distances, indices = self.faiss_index.search(
-                query_vec.astype("float32"), 5
-            )
+            distances, indices = self.faiss_index.search(query_vec.astype("float32"), 5)
             for dist, idx in zip(distances[0], indices[0]):
                 if idx >= 0:
                     semantic_hits.append((int(idx), float(dist)))
             if semantic_hits:
-                # Inner product distances are already cosine similarities
-                # (vectors are normalized), range roughly [0, 1]
                 avg_sim = np.mean([s for _, s in semantic_hits])
                 semantic_reward = float(max(0.0, avg_sim))
 
-        # --- 3. Merge hits, deduplicate ---
         seen: dict[int, dict] = {}
         for idx, bm25_score in bm25_hits:
             if idx not in seen:
@@ -246,23 +211,22 @@ class MCTSRewriter:
             if idx not in seen:
                 seen[idx] = {"bm25_score": 0.0, "semantic_score": sem_score}
             else:
-                seen[idx]["semantic_score"] = max(seen[idx]["semantic_score"], sem_score)
+                seen[idx]["semantic_score"] = max(
+                    seen[idx]["semantic_score"], sem_score
+                )
 
-        # Sort by combined signal
         ranked = sorted(
             seen.items(),
             key=lambda x: x[1]["bm25_score"] * 0.3 + x[1]["semantic_score"] * 0.7,
             reverse=True,
         )[:5]
 
-        # --- 4. LLM reward for top-1 ---
         llm_reward = 0.0
         if ranked:
             top_idx = ranked[0][0]
             top_chunk = self.chunks[top_idx]
             llm_reward = self._llm_score(query, top_chunk)
 
-        # --- 5. Build top_hits ---
         top_hits = []
         for idx, scores_dict in ranked:
             chunk = self.chunks[idx]
@@ -271,17 +235,18 @@ class MCTSRewriter:
                 if chunk.class_name and chunk.method_name
                 else chunk.method_name or chunk.chunk_id
             )
-            top_hits.append({
-                "chunk_id": chunk.chunk_id,
-                "name": display,
-                "file_path": chunk.file_path,
-                "chunk_type": chunk.chunk_type,
-                "signature": chunk.signature,
-                "bm25_score": round(scores_dict["bm25_score"], 3),
-                "semantic_score": round(scores_dict["semantic_score"], 3),
-            })
+            top_hits.append(
+                {
+                    "chunk_id": chunk.chunk_id,
+                    "name": display,
+                    "file_path": chunk.file_path,
+                    "chunk_type": chunk.chunk_type,
+                    "signature": chunk.signature,
+                    "bm25_score": round(scores_dict["bm25_score"], 3),
+                    "semantic_score": round(scores_dict["semantic_score"], 3),
+                }
+            )
 
-        # --- 6. Combined reward ---
         combined = (
             self.W_BM25 * bm25_reward
             + self.W_SEMANTIC * semantic_reward
@@ -317,7 +282,7 @@ class MCTSRewriter:
                 score = float(match.group(1))
                 return min(1.0, max(0.0, score / 10.0))
         except Exception as e:
-            print(f"[MCTS] LLM scoring error: {e}", flush=True)
+            logger.error(f"MCTS: LLM error: {e}")
 
         return 0.0
 
@@ -328,10 +293,6 @@ class MCTSRewriter:
             node.visits += 1
             node.total_reward += reward
             current_id = node.parent_id
-
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
 
     def _add_node(self, query: str, parent_id: int | None) -> _Node:
         node_id = len(self.nodes)
@@ -359,59 +320,66 @@ class MCTSRewriter:
         for line in response.strip().split("\n"):
             cleaned = re.sub(r"^\s*\d+[\.\)]\s*", "", line).strip()
             cleaned = re.sub(r"^[-•]\s*", "", cleaned).strip()
-            # Remove "Rewrite N:" or "Rewrite N: " prefixes that Qwen sometimes generates
-            cleaned = re.sub(r"^(?:Rewrite\s*\d+\s*[:.]?\s*)", "", cleaned, flags=re.IGNORECASE).strip()
-            cleaned = cleaned.strip('"\'')
+            cleaned = re.sub(
+                r"^(?:Rewrite\s*\d+\s*[:.]?\s*)", "", cleaned, flags=re.IGNORECASE
+            ).strip()
+            cleaned = cleaned.strip("\"'")
             if (
                 cleaned
                 and len(cleaned) > 5
                 and cleaned.lower() != original.lower()
-                # Reject degenerate outputs
                 and not re.match(r"^rewrite\s*\d*", cleaned, re.IGNORECASE)
             ):
                 variants.append(cleaned)
-        # If LLM failed to produce good variants, fall back to keyword extraction
         if not variants:
             variants.append(original)
         return variants
 
     def _extract_keywords(self, query: str) -> list[str]:
-        words = re.split(r'[\s,;]+', query)
+        words = re.split(r"[\s,;]+", query)
         keywords = []
         for w in words:
-            w = w.strip().strip('"\'()[]{}')
+            w = w.strip().strip("\"'()[]{}")
             if w and len(w) > 1:
                 keywords.append(w)
         return keywords[:10]
 
-    def _build_trace(self, best_path: list[int], best_query: str, original_query: str) -> dict:
+    def _build_trace(
+        self, best_path: list[int], best_query: str, original_query: str
+    ) -> dict:
         best_set = set(best_path)
-        root_entity_ids = {h["chunk_id"] for h in self.nodes[0].top_hits} if self.nodes else set()
+        root_entity_ids = (
+            {h["chunk_id"] for h in self.nodes[0].top_hits} if self.nodes else set()
+        )
 
         nodes = []
         for n in self.nodes:
             hits_with_flags = []
             for h in n.top_hits:
-                hits_with_flags.append({
-                    **h,
-                    "is_new": h["chunk_id"] not in root_entity_ids and n.id != 0,
-                })
+                hits_with_flags.append(
+                    {
+                        **h,
+                        "is_new": h["chunk_id"] not in root_entity_ids and n.id != 0,
+                    }
+                )
 
-            nodes.append({
-                "id": n.id,
-                "query": n.query,
-                "parent_id": n.parent_id,
-                "children_ids": list(n.children_ids),
-                "visits": n.visits,
-                "avg_reward": round(n.avg_reward, 4),
-                "is_best": n.id in best_set,
-                "top_hits": hits_with_flags,
-                "reward_components": {
-                    "bm25": n.bm25_reward,
-                    "semantic": n.semantic_reward,
-                    "llm": n.llm_reward,
-                },
-            })
+            nodes.append(
+                {
+                    "id": n.id,
+                    "query": n.query,
+                    "parent_id": n.parent_id,
+                    "children_ids": list(n.children_ids),
+                    "visits": n.visits,
+                    "avg_reward": round(n.avg_reward, 4),
+                    "is_best": n.id in best_set,
+                    "top_hits": hits_with_flags,
+                    "reward_components": {
+                        "bm25": n.bm25_reward,
+                        "semantic": n.semantic_reward,
+                        "llm": n.llm_reward,
+                    },
+                }
+            )
 
         return {
             "nodes": nodes,
@@ -429,8 +397,5 @@ def mcts_rewrite(
     chunks: list[CodeChunk],
     faiss_index=None,
 ) -> dict:
-    """
-    Convenience function: run MCTS rewriting with hybrid reward.
-    """
     rewriter = MCTSRewriter(bm25, corpus, chunks, faiss_index)
     return rewriter.rewrite(query)

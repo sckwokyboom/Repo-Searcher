@@ -18,26 +18,26 @@ DEFAULT_MIN_SAMPLES = 50
 
 class BenchmarkSample(BaseModel):
     event_id: str
-    repo: str  # owner/repo
+    repo: str
     sha: str
-    query: str  # cleaned description
+    query: str
     raw_description: str
-    changed_files: list[str]  # relative java file paths
-    changed_methods: list[str]  # method names from hunk headers
-    low_quality: bool = False  # query < 5 words
+    changed_files: list[str]
+    changed_methods: list[str]
+    low_quality: bool = False
 
 
 class BenchmarkDataset(BaseModel):
-    repos: dict[str, list[BenchmarkSample]]  # repo -> samples
+    repos: dict[str, list[BenchmarkSample]]
     total_samples: int = 0
     total_repos: int = 0
 
 
 class RetrievalResult(BaseModel):
-    sample_id: str  # event_id
+    sample_id: str
     retriever: str
-    retrieved_files: list[str]  # file paths from top-K chunks
-    retrieved_methods: list[str]  # method names from top-K chunks
+    retrieved_files: list[str]
+    retrieved_methods: list[str]
     scores: list[float]
     top_k: int
 
@@ -46,7 +46,7 @@ class SampleMetrics(BaseModel):
     sample_id: str
     retriever: str
     repo: str
-    recall_at_k: dict[int, float] = {}  # K -> recall
+    recall_at_k: dict[int, float] = {}
     precision_at_k: dict[int, float] = {}
     mrr: float = 0.0
     hit_at_k: dict[int, float] = {}

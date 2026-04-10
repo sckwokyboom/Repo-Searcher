@@ -2,7 +2,7 @@ from pathlib import Path
 
 import networkx as nx
 import tree_sitter_java as tsjava
-from tree_sitter import Language, Parser
+from tree_sitter import Language, Node, Parser
 
 from app.models.search import CodeChunk
 
@@ -10,10 +10,12 @@ JAVA_LANGUAGE = Language(tsjava.language())
 
 
 def _get_node_text(node, source_bytes: bytes) -> str:
-    return source_bytes[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
+    return source_bytes[node.start_byte : node.end_byte].decode(
+        "utf-8", errors="replace"
+    )
 
 
-def _find_containing_method(node) -> str | None:
+def _find_containing_method(node: Node) -> str | None:
     current = node.parent
     while current:
         if current.type in ("method_declaration", "constructor_declaration"):
@@ -23,14 +25,14 @@ def _find_containing_method(node) -> str | None:
             while parent:
                 if parent.type in ("class_declaration", "interface_declaration"):
                     for child in parent.children:
-                        if child.type == "identifier":
+                        if child.type == "identifier" and child.text is not None:
                             class_name = child.text.decode("utf-8")
                             break
                     break
                 parent = parent.parent
 
             for child in current.children:
-                if child.type == "identifier":
+                if child.type == "identifier" and child.text is not None:
                     method_name = child.text.decode("utf-8")
                     break
 
@@ -47,14 +49,16 @@ def _find_containing_method(node) -> str | None:
 def build_call_graph(chunks: list[CodeChunk], repo_path: Path) -> nx.DiGraph:
     graph = nx.DiGraph()
 
-    # Build method name -> chunk_id mapping
     method_name_to_chunks: dict[str, list[str]] = {}
     for chunk in chunks:
         if chunk.chunk_type == "method" and chunk.method_name:
-            graph.add_node(chunk.chunk_id, label=chunk.method_name, file_path=chunk.file_path)
-            method_name_to_chunks.setdefault(chunk.method_name, []).append(chunk.chunk_id)
+            graph.add_node(
+                chunk.chunk_id, label=chunk.method_name, file_path=chunk.file_path
+            )
+            method_name_to_chunks.setdefault(chunk.method_name, []).append(
+                chunk.chunk_id
+            )
 
-    # Parse files and find method invocations
     parser = Parser(JAVA_LANGUAGE)
     java_files = sorted(repo_path.rglob("*.java"))
 
@@ -64,7 +68,14 @@ def build_call_graph(chunks: list[CodeChunk], repo_path: Path) -> nx.DiGraph:
             tree = parser.parse(source)
             relative_path = str(file_path.relative_to(repo_path))
 
-            _extract_calls(tree.root_node, source, relative_path, graph, method_name_to_chunks, chunks)
+            _extract_calls(
+                tree.root_node,
+                source,
+                relative_path,
+                graph,
+                method_name_to_chunks,
+                chunks,
+            )
         except Exception:
             continue
 
@@ -72,7 +83,7 @@ def build_call_graph(chunks: list[CodeChunk], repo_path: Path) -> nx.DiGraph:
 
 
 def _extract_calls(
-    node,
+    node: Node,
     source: bytes,
     file_path: str,
     graph: nx.DiGraph,
@@ -80,25 +91,25 @@ def _extract_calls(
     chunks: list[CodeChunk],
 ):
     if node.type == "method_invocation":
-        # Get the invoked method name
         for child in node.children:
-            if child.type == "identifier":
+            if child.type == "identifier" and child.text is not None:
                 invoked_name = child.text.decode("utf-8")
                 caller = _find_containing_method(node)
 
                 if caller and invoked_name in method_name_to_chunks:
-                    # Find caller chunk_id
                     caller_chunk_ids = [
-                        c.chunk_id for c in chunks
-                        if c.file_path == file_path and c.method_name == caller.split(".")[-1]
+                        c.chunk_id
+                        for c in chunks
+                        if c.file_path == file_path
+                        and c.method_name == caller.split(".")[-1]
                     ]
                     if not caller_chunk_ids:
                         caller_chunk_ids = [
-                            c.chunk_id for c in chunks
+                            c.chunk_id
+                            for c in chunks
                             if c.method_name == caller.split(".")[-1]
                         ]
 
-                    # Resolve target - prefer same file, then any
                     target_ids = method_name_to_chunks[invoked_name]
                     same_file = [t for t in target_ids if t.startswith(file_path)]
                     target = same_file[0] if same_file else target_ids[0]

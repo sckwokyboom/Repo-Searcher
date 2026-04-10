@@ -1,10 +1,3 @@
-"""
-Generate LoRA training data from indexed CodeChunks.
-
-Adapted from benchmark/lora_training/query_rewriter/prepare_data.py
-for online use within the backend.
-"""
-
 import json
 import random
 import re
@@ -13,6 +6,7 @@ from pathlib import Path
 
 import tree_sitter
 import tree_sitter_java as tsjava
+from tree_sitter import Node
 
 from app.indexer.bm25_builder import tokenize
 from app.models.search import CodeChunk
@@ -23,80 +17,344 @@ SYSTEM_PROMPT = (
 )
 
 NOISE_INVOCATIONS = {
-    "get", "set", "put", "add", "remove", "size", "isEmpty", "contains",
-    "equals", "hashCode", "toString", "valueOf", "iterator", "next", "hasNext",
-    "assertEquals", "assertTrue", "assertFalse", "assertNotNull", "assertNull",
-    "assertThrows", "assertSame", "assertNotSame", "fail",
-    "before", "after", "beforeEach", "afterEach",
-    "println", "print", "format", "append", "length", "substring",
-    "getClass", "getName", "getMessage", "getKey", "getValue",
-    "close", "flush", "write", "read",
+    "get",
+    "set",
+    "put",
+    "add",
+    "remove",
+    "size",
+    "isEmpty",
+    "contains",
+    "equals",
+    "hashCode",
+    "toString",
+    "valueOf",
+    "iterator",
+    "next",
+    "hasNext",
+    "assertEquals",
+    "assertTrue",
+    "assertFalse",
+    "assertNotNull",
+    "assertNull",
+    "assertThrows",
+    "assertSame",
+    "assertNotSame",
+    "fail",
+    "before",
+    "after",
+    "beforeEach",
+    "afterEach",
+    "println",
+    "print",
+    "format",
+    "append",
+    "length",
+    "substring",
+    "getClass",
+    "getName",
+    "getMessage",
+    "getKey",
+    "getValue",
+    "close",
+    "flush",
+    "write",
+    "read",
 }
 
 NOISE_TYPES = {
-    "String", "Object", "Integer", "Long", "Boolean", "Double", "Float",
-    "Byte", "Short", "Character", "Void", "Class", "Number",
-    "Override", "Deprecated", "SuppressWarnings", "Test", "BeforeEach",
-    "AfterEach", "DisplayName", "ParameterizedTest",
+    "String",
+    "Object",
+    "Integer",
+    "Long",
+    "Boolean",
+    "Double",
+    "Float",
+    "Byte",
+    "Short",
+    "Character",
+    "Void",
+    "Class",
+    "Number",
+    "Override",
+    "Deprecated",
+    "SuppressWarnings",
+    "Test",
+    "BeforeEach",
+    "AfterEach",
+    "DisplayName",
+    "ParameterizedTest",
 }
 
 JAVA_API_TYPES = {
-    "Map", "HashMap", "TreeMap", "LinkedHashMap", "ConcurrentHashMap",
-    "List", "ArrayList", "LinkedList", "Set", "HashSet", "TreeSet",
-    "Collection", "Collections", "Arrays", "Iterator", "Iterable",
-    "Comparator", "Comparable", "Optional",
-    "BitSet", "BigDecimal", "BigInteger",
-    "Date", "Calendar", "LocalDate", "LocalDateTime", "Instant", "Duration",
-    "Pattern", "Matcher", "StringBuilder", "StringBuffer",
-    "File", "Path", "InputStream", "OutputStream", "Reader", "Writer",
-    "URL", "URI", "Socket", "ServerSocket",
-    "Thread", "Runnable", "Callable", "Future", "ExecutorService",
-    "AtomicInteger", "AtomicLong", "AtomicReference", "AtomicBoolean",
-    "Lock", "ReentrantLock", "CountDownLatch", "Semaphore",
-    "Field", "Method", "Constructor", "Modifier",
-    "ClassLoader", "SecurityManager",
-    "Exception", "RuntimeException", "IOException", "IllegalArgumentException",
-    "NullPointerException", "IndexOutOfBoundsException",
-    "JsonObject", "JsonArray", "JsonElement",
+    "Map",
+    "HashMap",
+    "TreeMap",
+    "LinkedHashMap",
+    "ConcurrentHashMap",
+    "List",
+    "ArrayList",
+    "LinkedList",
+    "Set",
+    "HashSet",
+    "TreeSet",
+    "Collection",
+    "Collections",
+    "Arrays",
+    "Iterator",
+    "Iterable",
+    "Comparator",
+    "Comparable",
+    "Optional",
+    "BitSet",
+    "BigDecimal",
+    "BigInteger",
+    "Date",
+    "Calendar",
+    "LocalDate",
+    "LocalDateTime",
+    "Instant",
+    "Duration",
+    "Pattern",
+    "Matcher",
+    "StringBuilder",
+    "StringBuffer",
+    "File",
+    "Path",
+    "InputStream",
+    "OutputStream",
+    "Reader",
+    "Writer",
+    "URL",
+    "URI",
+    "Socket",
+    "ServerSocket",
+    "Thread",
+    "Runnable",
+    "Callable",
+    "Future",
+    "ExecutorService",
+    "AtomicInteger",
+    "AtomicLong",
+    "AtomicReference",
+    "AtomicBoolean",
+    "Lock",
+    "ReentrantLock",
+    "CountDownLatch",
+    "Semaphore",
+    "Field",
+    "Method",
+    "Constructor",
+    "Modifier",
+    "ClassLoader",
+    "SecurityManager",
+    "Exception",
+    "RuntimeException",
+    "IOException",
+    "IllegalArgumentException",
+    "NullPointerException",
+    "IndexOutOfBoundsException",
+    "JsonObject",
+    "JsonArray",
+    "JsonElement",
 }
 
 STOPWORDS = {
-    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-    "have", "has", "had", "do", "does", "did", "will", "would", "could",
-    "should", "may", "might", "shall", "can", "need", "must",
-    "for", "of", "in", "on", "at", "to", "from", "by", "with", "as",
-    "and", "or", "but", "not", "no", "nor", "so", "yet",
-    "this", "that", "these", "those", "it", "its",
-    "where", "which", "what", "who", "whom", "whose", "when", "how", "why",
-    "if", "then", "else", "than", "also", "just", "only", "very",
-    "all", "each", "every", "some", "any", "few", "more", "most",
-    "here", "there", "up", "down", "out", "into",
+    "a",
+    "an",
+    "the",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "have",
+    "has",
+    "had",
+    "do",
+    "does",
+    "did",
+    "will",
+    "would",
+    "could",
+    "should",
+    "may",
+    "might",
+    "shall",
+    "can",
+    "need",
+    "must",
+    "for",
+    "of",
+    "in",
+    "on",
+    "at",
+    "to",
+    "from",
+    "by",
+    "with",
+    "as",
+    "and",
+    "or",
+    "but",
+    "not",
+    "no",
+    "nor",
+    "so",
+    "yet",
+    "this",
+    "that",
+    "these",
+    "those",
+    "it",
+    "its",
+    "where",
+    "which",
+    "what",
+    "who",
+    "whom",
+    "whose",
+    "when",
+    "how",
+    "why",
+    "if",
+    "then",
+    "else",
+    "than",
+    "also",
+    "just",
+    "only",
+    "very",
+    "all",
+    "each",
+    "every",
+    "some",
+    "any",
+    "few",
+    "more",
+    "most",
+    "here",
+    "there",
+    "up",
+    "down",
+    "out",
+    "into",
 }
 
 TRIVIAL_METHODS = {
-    "toString", "hashCode", "equals", "main", "setUp", "tearDown",
-    "init", "destroy", "clone", "finalize", "compareTo",
+    "toString",
+    "hashCode",
+    "equals",
+    "main",
+    "setUp",
+    "tearDown",
+    "init",
+    "destroy",
+    "clone",
+    "finalize",
+    "compareTo",
 }
 
 TAG_RULES = {
-    "conversion": {"convert", "transform", "parse", "from", "Converter", "cast", "coerce", "map"},
-    "validation": {"validate", "check", "verify", "require", "ensure", "guard", "constraint"},
-    "parsing": {"parse", "read", "decode", "deserialize", "unmarshal", "extract", "scan"},
-    "reflection": {"reflect", "invoke", "getMethod", "getField", "getDeclaredField",
-                   "setAccessible", "newInstance", "forName"},
-    "security": {"security", "sanitize", "encrypt", "decrypt", "hash", "token", "credential",
-                 "permission", "access", "authorize"},
-    "concurrency": {"synchronized", "atomic", "concurrent", "lock", "thread", "semaphore",
-                    "latch", "barrier", "volatile"},
-    "collection_ops": {"sort", "filter", "merge", "flatten", "group", "partition", "collect",
-                       "stream", "reduce", "aggregate"},
-    "date_time": {"date", "time", "calendar", "temporal", "instant", "duration", "period",
-                  "zone", "epoch", "timestamp"},
-    "serialization": {"serialize", "json", "xml", "marshal", "toJson", "fromJson", "toXml"},
+    "conversion": {
+        "convert",
+        "transform",
+        "parse",
+        "from",
+        "Converter",
+        "cast",
+        "coerce",
+        "map",
+    },
+    "validation": {
+        "validate",
+        "check",
+        "verify",
+        "require",
+        "ensure",
+        "guard",
+        "constraint",
+    },
+    "parsing": {
+        "parse",
+        "read",
+        "decode",
+        "deserialize",
+        "unmarshal",
+        "extract",
+        "scan",
+    },
+    "reflection": {
+        "reflect",
+        "invoke",
+        "getMethod",
+        "getField",
+        "getDeclaredField",
+        "setAccessible",
+        "newInstance",
+        "forName",
+    },
+    "security": {
+        "security",
+        "sanitize",
+        "encrypt",
+        "decrypt",
+        "hash",
+        "token",
+        "credential",
+        "permission",
+        "access",
+        "authorize",
+    },
+    "concurrency": {
+        "synchronized",
+        "atomic",
+        "concurrent",
+        "lock",
+        "thread",
+        "semaphore",
+        "latch",
+        "barrier",
+        "volatile",
+    },
+    "collection_ops": {
+        "sort",
+        "filter",
+        "merge",
+        "flatten",
+        "group",
+        "partition",
+        "collect",
+        "stream",
+        "reduce",
+        "aggregate",
+    },
+    "date_time": {
+        "date",
+        "time",
+        "calendar",
+        "temporal",
+        "instant",
+        "duration",
+        "period",
+        "zone",
+        "epoch",
+        "timestamp",
+    },
+    "serialization": {
+        "serialize",
+        "json",
+        "xml",
+        "marshal",
+        "toJson",
+        "fromJson",
+        "toXml",
+    },
     "comparison": {"compare", "diff", "deep", "shallow", "Comparator", "ordering"},
 }
 
-# Tree-sitter singleton
 _ts_parser = None
 
 
@@ -116,15 +374,19 @@ def _extract_invocations_and_types(body: str) -> tuple[list[str], list[str]]:
     invocations = []
     types = []
 
-    def walk(node):
+    def walk(node: Node):
         if node.type == "method_invocation":
             method_name = None
             for child in node.children:
-                if child.type == "identifier":
+                if child.type == "identifier" and child.text is not None:
                     method_name = child.text.decode()
-            if method_name and method_name not in NOISE_INVOCATIONS and len(method_name) > 2:
+            if (
+                method_name
+                and method_name not in NOISE_INVOCATIONS
+                and len(method_name) > 2
+            ):
                 invocations.append(method_name)
-        elif node.type == "type_identifier":
+        elif node.type == "type_identifier" and node.text is not None:
             type_name = node.text.decode()
             if type_name not in NOISE_TYPES and len(type_name) > 1:
                 types.append(type_name)
@@ -174,7 +436,8 @@ def _extract_javadoc_summary(javadoc: str | None) -> str | None:
         return None
     first_sent = re.sub(
         r"^(Returns?|Gets?|Sets?|Creates?|Builds?|Converts?|Checks?|Finds?|Determines?|Provides?|Computes?)\s+",
-        "", first_sent,
+        "",
+        first_sent,
     )
     first_sent = first_sent.strip()
     if len(first_sent) < 8:
@@ -196,12 +459,21 @@ def _extract_return_type(signature: str) -> str | None:
     if m:
         ret = m.group(1).strip()
         ret = re.sub(r"<.*>", "", ret).strip()
-        if ret not in NOISE_TYPES and ret not in {"public", "private", "protected", "static", "final", "abstract"}:
+        if ret not in NOISE_TYPES and ret not in {
+            "public",
+            "private",
+            "protected",
+            "static",
+            "final",
+            "abstract",
+        }:
             return ret
     return None
 
 
-def _infer_semantic_tags(method_tokens: list[str], invocations: list[str], types: list[str]) -> list[str]:
+def _infer_semantic_tags(
+    method_tokens: list[str], invocations: list[str], types: list[str]
+) -> list[str]:
     all_terms = set()
     for t in method_tokens:
         all_terms.add(t.lower())
@@ -225,8 +497,6 @@ def _classify_type(type_name: str) -> str:
         return "api"
     return "project"
 
-
-# --- Method Profile ---
 
 @dataclass
 class MethodProfile:
@@ -295,8 +565,6 @@ def build_profile(chunk: CodeChunk) -> MethodProfile | None:
         quality_score=score,
     )
 
-
-# --- Query generators ---
 
 def _query_behavioral(profile: MethodProfile) -> str | None:
     if len(profile.method_tokens) < 2:
@@ -484,17 +752,11 @@ def _is_quality_sample(query: str, target: dict) -> bool:
     return True
 
 
-# --- Public API ---
-
-def generate_training_data(chunks: list[CodeChunk], seed: int = 42) -> tuple[list[dict], list[dict], int]:
-    """Generate LoRA training data from indexed chunks.
-
-    Returns (train_samples, val_samples, num_profiles).
-    Each sample is a dict with 'prompt' and 'completion' keys.
-    """
+def generate_training_data(
+    chunks: list[CodeChunk], seed: int = 42
+) -> tuple[list[dict], list[dict], int]:
     random.seed(seed)
 
-    # Build profiles
     profiles = []
     for chunk in chunks:
         profile = build_profile(chunk)
@@ -504,7 +766,6 @@ def generate_training_data(chunks: list[CodeChunk], seed: int = 42) -> tuple[lis
     if not profiles:
         return [], [], 0
 
-    # Select quality methods
     profiles.sort(key=lambda p: p.quality_score, reverse=True)
     max_test = int(500 * 0.25)
     max_impl = 500 - max_test
@@ -513,7 +774,6 @@ def generate_training_data(chunks: list[CodeChunk], seed: int = 42) -> tuple[lis
     selected = selected_impl + selected_test
     random.shuffle(selected)
 
-    # Generate samples
     generators = [
         ("behavioral", _query_behavioral),
         ("navigation", _query_navigation),
@@ -543,10 +803,6 @@ def generate_training_data(chunks: list[CodeChunk], seed: int = 42) -> tuple[lis
 
 
 def fast_estimate_samples(chunk_count: int) -> int:
-    """Fast sample count estimate without generating data.
-
-    ~60% of chunks produce profiles, each yields ~2 usable samples.
-    """
     estimated_profiles = int(chunk_count * 0.6)
     estimated_samples = int(estimated_profiles * 2 * 0.9)  # 90% train split
     return min(estimated_samples, 2000)  # capped at 2000
@@ -558,10 +814,6 @@ def estimate_training_time(
     batch_size: int = 2,
     grad_accum: int = 8,
 ) -> float:
-    """Estimate training time in minutes.
-
-    Based on ~0.9s per step on Apple Silicon MPS (M-series).
-    """
     steps_per_epoch = max(1, num_samples // (batch_size * grad_accum))
     total_steps = steps_per_epoch * epochs
     seconds = total_steps * 0.9

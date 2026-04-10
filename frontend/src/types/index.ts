@@ -123,3 +123,41 @@ export interface GitHubRepo {
   owner_avatar: string;
   language: string | null;
 }
+
+export interface MCTSRewardComponents {
+  bm25: number;
+  semantic: number;
+  llm: number;
+}
+
+export interface MCTSHit {
+  chunk_id: string;
+  chunk_type: string;
+  name: string;
+  file_path: string;
+  signature: string;
+  bm25_score: number;
+  semantic_score: number;
+  is_new: boolean;
+}
+
+export interface MCTSNode {
+  id: number;
+  parent_id: number | null;
+  query: string;
+  visits: number;
+  avg_reward: number;
+  is_best: boolean;
+  children_ids: number[];
+  top_hits: MCTSHit[];
+  reward_components: MCTSRewardComponents | null;
+}
+
+export interface MCTSTrace {
+  trace_id: string;
+  repo_id: string;
+  original_query: string;
+  best_query: string;
+  iterations: number;
+  nodes: MCTSNode[];
+}

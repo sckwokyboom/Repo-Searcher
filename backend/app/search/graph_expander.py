@@ -23,8 +23,6 @@ class GraphExpander:
     def get_subgraph(self, method_id: str, hops: int = 1) -> CallGraphResponse:
         if method_id not in self.graph:
             return CallGraphResponse(nodes=[], edges=[])
-
-        # Collect nodes within N hops
         visited = {method_id}
         frontier = {method_id}
 
@@ -41,8 +39,6 @@ class GraphExpander:
                             visited.add(succ)
                             new_frontier.add(succ)
             frontier = new_frontier
-
-        # Build response
         nodes = []
         for node_id in visited:
             data = self.graph.nodes.get(node_id, {})

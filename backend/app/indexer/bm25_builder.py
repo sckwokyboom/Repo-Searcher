@@ -7,16 +7,14 @@ from app.models.search import CodeChunk
 
 def tokenize(text: str) -> list[str]:
     tokens = []
-    for word in re.split(r'[\s\.\,\;\:\(\)\{\}\[\]\"\']+', text):
+    for word in re.split(r"[\s\.\,\;\:\(\)\{\}\[\]\"\']+", text):
         if not word:
             continue
-        # Split camelCase: getUserById -> get, User, By, Id
-        camel_parts = re.sub(r'([a-z])([A-Z])', r'\1 \2', word)
-        camel_parts = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1 \2', camel_parts)
+        camel_parts = re.sub(r"([a-z])([A-Z])", r"\1 \2", word)
+        camel_parts = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", camel_parts)
         for part in camel_parts.split():
             if len(part) > 1:
                 tokens.append(part.lower())
-        # Also split on underscores
         for part in word.split("_"):
             if len(part) > 1:
                 tokens.append(part.lower())

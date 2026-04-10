@@ -1,14 +1,3 @@
-"""
-Generate training data for LoRA fine-tuning from git history.
-
-For each commit that modifies Java files:
-- Query = commit message (cleaned)
-- Positive chunks = chunks from changed files
-- Hard negatives = top BM25 hits that are NOT in changed files
-
-Output: JSONL with (prompt, completion) pairs for SFT training.
-"""
-
 import json
 import re
 import subprocess
@@ -20,22 +9,31 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "backend"))
 
-from app.indexer.bm25_builder import tokenize
-from app.indexer.store import load_bm25, load_chunks
-from benchmark.query_cleaner import clean_query
+import random
 
+from backend.app.indexer.bm25_builder import tokenize
+from backend.app.indexer.store import load_bm25, load_chunks
+from benchmark.query_cleaner import clean_query
 
 REPOS_FULL_DIR = Path(__file__).parent.parent / "results" / "repos_full_history"
 OUTPUT_DIR = Path(__file__).parent / "data"
 
 
 def get_java_commits(repo_path: Path, max_commits: int = 2000) -> list[dict]:
-    """Extract commits that modify Java files."""
     result = subprocess.run(
-        ["git", "log", f"--max-count={max_commits}", "--diff-filter=M",
-         "--name-only", "--format=COMMIT_SEP%n%H%n%s%n%b%nFILES_START",
-         "--", "*.java"],
-        cwd=str(repo_path), capture_output=True, text=True,
+        [
+            "git",
+            "log",
+            f"--max-count={max_commits}",
+            "--diff-filter=M",
+            "--name-only",
+            "--format=COMMIT_SEP%n%H%n%s%n%b%nFILES_START",
+            "--",
+            "*.java",
+        ],
+        cwd=str(repo_path),
+        capture_output=True,
+        text=True,
     )
 
     commits = []
@@ -63,8 +61,9 @@ def get_java_commits(repo_path: Path, max_commits: int = 2000) -> list[dict]:
         if body:
             description = f"{subject}\n{body}"
 
-        java_files = [f.strip() for f in files_text.split("\n")
-                      if f.strip().endswith(".java")]
+        java_files = [
+            f.strip() for f in files_text.split("\n") if f.strip().endswith(".java")
+        ]
 
         if not java_files:
             continue
@@ -73,12 +72,14 @@ def get_java_commits(repo_path: Path, max_commits: int = 2000) -> list[dict]:
         if low_quality or len(query) < 10:
             continue
 
-        commits.append({
-            "sha": sha,
-            "query": query,
-            "raw_description": description,
-            "changed_files": java_files,
-        })
+        commits.append(
+            {
+                "sha": sha,
+                "query": query,
+                "raw_description": description,
+                "changed_files": java_files,
+            }
+        )
 
     return commits
 
@@ -89,16 +90,12 @@ def generate_training_samples(
     max_negatives: int = 5,
     max_positives: int = 5,
 ) -> list[dict]:
-    """Generate (prompt, completion) pairs for scorer training."""
     chunks = load_chunks(repo_id)
     bm25, corpus = load_bm25(repo_id)
-
-    # Build file -> chunk indices mapping
     file_to_chunks: dict[str, list[int]] = {}
     for i, chunk in enumerate(chunks):
         file_to_chunks.setdefault(chunk.file_path, []).append(i)
 
-    # Index all file paths in the repo
     all_file_paths = set(file_to_chunks.keys())
 
     samples = []
@@ -106,18 +103,14 @@ def generate_training_samples(
 
     for commit in commits:
         query = commit["query"]
-
-        # Find which changed files exist in the index
         changed_in_index = [f for f in commit["changed_files"] if f in all_file_paths]
         if not changed_in_index:
             skipped += 1
             continue
 
-        # --- Positive samples ---
         positive_chunks = []
         for f in changed_in_index[:max_positives]:
             chunk_indices = file_to_chunks[f]
-            # Pick the chunk with highest BM25 score to this query
             tokenized_query = tokenize(query)
             if tokenized_query:
                 scores = bm25.get_scores(tokenized_query)
@@ -126,7 +119,6 @@ def generate_training_samples(
                 best_idx = chunk_indices[0]
             positive_chunks.append(best_idx)
 
-        # --- Hard negative samples (high BM25 but NOT in changed files) ---
         changed_set = set(changed_in_index)
         tokenized_query = tokenize(query)
         if tokenized_query:
@@ -141,36 +133,39 @@ def generate_training_samples(
         else:
             negative_chunks = []
 
-        # --- Create training samples ---
         for idx in positive_chunks:
             chunk = chunks[idx]
             prompt = _format_prompt(query, chunk)
-            # Positive: score 8-10 (randomize slightly for diversity)
             score = 9
-            samples.append({
-                "prompt": prompt,
-                "completion": str(score),
-                "label": "positive",
-                "repo": repo_id,
-                "query": query,
-                "file": chunk.file_path,
-            })
+            samples.append(
+                {
+                    "prompt": prompt,
+                    "completion": str(score),
+                    "label": "positive",
+                    "repo": repo_id,
+                    "query": query,
+                    "file": chunk.file_path,
+                }
+            )
 
         for idx in negative_chunks:
             chunk = chunks[idx]
             prompt = _format_prompt(query, chunk)
-            # Hard negative: score 1-3
             score = 2
-            samples.append({
-                "prompt": prompt,
-                "completion": str(score),
-                "label": "negative",
-                "repo": repo_id,
-                "query": query,
-                "file": chunk.file_path,
-            })
+            samples.append(
+                {
+                    "prompt": prompt,
+                    "completion": str(score),
+                    "label": "negative",
+                    "repo": repo_id,
+                    "query": query,
+                    "file": chunk.file_path,
+                }
+            )
 
-    print(f"  Generated {len(samples)} samples ({skipped} commits skipped - files not in index)")
+    print(
+        f"Generated {len(samples)} samples ({skipped} commits skipped - files not in index)"
+    )
     return samples
 
 
@@ -214,20 +209,18 @@ def main():
 
         print(f"\nProcessing {repo_id}...")
         commits = get_java_commits(repo_path)
-        print(f"  Found {len(commits)} commits with Java changes")
+        print(f"Found {len(commits)} commits with Java changes")
 
         samples = generate_training_samples(repo_id, commits)
         all_samples.extend(samples)
 
-    # Split into train/val (90/10)
-    import random
+
     random.seed(42)
     random.shuffle(all_samples)
     split = int(len(all_samples) * 0.9)
     train = all_samples[:split]
     val = all_samples[split:]
 
-    # Save as JSONL
     train_path = OUTPUT_DIR / "train_scorer.jsonl"
     val_path = OUTPUT_DIR / "val_scorer.jsonl"
 
@@ -237,7 +230,6 @@ def main():
                 f.write(json.dumps(sample, ensure_ascii=False) + "\n")
         print(f"\nSaved {len(data)} samples to {path}")
 
-    # Stats
     pos = sum(1 for s in all_samples if s["label"] == "positive")
     neg = sum(1 for s in all_samples if s["label"] == "negative")
     print(f"\nTotal: {len(all_samples)} samples ({pos} positive, {neg} negative)")

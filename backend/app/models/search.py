@@ -1,6 +1,11 @@
-from typing import Literal
+from typing import Literal, TypedDict
 
 from pydantic import BaseModel
+
+
+class JavaClassInfo(TypedDict):
+    javadoc: str | None
+    name: str
 
 
 class CodeChunk(BaseModel):
@@ -31,7 +36,6 @@ class SearchResult(BaseModel):
 
 
 class RewriteDetails(BaseModel):
-    """Structured query rewriting output from LLM (matches LoRA training format)."""
     intent: str | None = None
     search_scope: str | None = None
     keywords: list[str] = []
